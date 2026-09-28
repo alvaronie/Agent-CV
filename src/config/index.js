@@ -14,6 +14,15 @@ try {
   // Si no hay .env (p. ej. en producción con variables ya inyectadas), seguimos.
 }
 
+// Lee una variable numérica respetando el 0 (a diferencia de `Number(x) || def`, que
+// trataría 0 como "sin valor"). Útil para límites donde 0 significa "sin límite".
+function numEnv(name, def) {
+  const raw = process.env[name];
+  if (raw === undefined || raw === '') return def;
+  const n = Number(raw);
+  return Number.isFinite(n) ? n : def;
+}
+
 export const config = {
   port: Number(process.env.PORT) || 3000,
   // Interfaz en la que escucha el servidor. Por defecto SOLO la máquina local
@@ -61,6 +70,15 @@ export const config = {
     // Validez (segundos) del token del stream. Twilio abre el WebSocket casi de
     // inmediato tras el webhook, así que un margen corto sobra.
     streamTokenTtlSeconds: Number(process.env.STREAM_TOKEN_TTL_SECONDS) || 300,
+  },
+
+  // Límites de admisión de llamadas (Fase 6): guardarraíl de coste frente a picos o
+  // abuso. 0 en cualquiera de ellos = sin límite.
+  limits: {
+    // Máximo de llamadas ACTIVAS a la vez (concurrencia).
+    maxConcurrentCalls: numEnv('MAX_CONCURRENT_CALLS', 2),
+    // Máximo de llamadas aceptadas por día (se reinicia a medianoche UTC).
+    maxCallsPerDay: numEnv('MAX_CALLS_PER_DAY', 50),
   },
 
   maxCallSeconds: Number(process.env.MAX_CALL_SECONDS) || 600,

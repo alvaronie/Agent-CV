@@ -21,6 +21,7 @@ import { buildInstructions } from '../agent/prompt.js';
 import { toolDefinitions, dispatchToolCall } from '../agent/tools/index.js';
 import { twilioClient } from './twilioClient.js';
 import { reportCall } from '../services/callReport.js';
+import { registerCallStart, registerCallEnd } from './callLimiter.js';
 import { config } from '../config/index.js';
 import { logger } from '../utils/logger.js';
 
@@ -38,6 +39,7 @@ export async function handleMediaStream(twilioWs) {
   let streamSid = null;
   let callSid = null;
   let closing = false;
+  let counted = false; // ¿hemos contado esta llamada en el limitador?
 
   // Estado para el resumen (Fase 5). `turns` solo existe en memoria: ver nota D11.
   let callerNumber = '';
@@ -163,6 +165,8 @@ export async function handleMediaStream(twilioWs) {
         callSid = msg.start?.callSid;
         callerNumber = msg.start?.customParameters?.from || '';
         startedAt = new Date();
+        registerCallStart();
+        counted = true;
         logger.info(`[media] stream iniciado (streamSid=${streamSid}, callSid=${callSid})`);
         break;
       case 'media':
@@ -180,6 +184,10 @@ export async function handleMediaStream(twilioWs) {
   twilioWs.on('close', () => {
     clearTimeout(maxTimer);
     realtime.close();
+    if (counted) {
+      registerCallEnd();
+      counted = false;
+    }
     logger.info('[media] conexión Twilio cerrada');
     // Resumen + email + registro. No esperamos aquí (el callback es síncrono), pero
     // capturamos cualquier fallo para que no quede una promesa sin manejar.

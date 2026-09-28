@@ -18,6 +18,7 @@ import { config } from '../config/index.js';
 import { logger } from '../utils/logger.js';
 import { isValidTwilioRequest } from '../security/twilioSignature.js';
 import { createStreamToken } from '../security/streamToken.js';
+import { canAcceptCall } from './callLimiter.js';
 
 const VoiceResponse = twilio.twiml.VoiceResponse;
 
@@ -29,12 +30,27 @@ export function handleIncomingCall(request, reply) {
     return reply.send('Forbidden');
   }
 
+  // 2) Límite de admisión (concurrencia / tope diario): guardarraíl de coste. Si estamos
+  // al límite, respondemos con una locución breve y colgamos, sin abrir el stream.
+  const admission = canAcceptCall();
+  if (!admission.ok) {
+    logger.warn(`[webhook] llamada rechazada por límite: ${admission.reason}`);
+    const busy = new VoiceResponse();
+    busy.say(
+      { language: 'en-US' },
+      'Sorry, the assistant is not available right now. Please try again later.'
+    );
+    busy.hangup();
+    reply.header('Content-Type', 'text/xml');
+    return reply.send(busy.toString());
+  }
+
   // Host público: preferimos PUBLIC_URL si está configurado; si no, el host de la petición.
   const host = config.publicUrl
     ? config.publicUrl.replace(/^https?:\/\//, '').replace(/\/$/, '')
     : request.headers.host;
 
-  // 2) Token de autenticación para el WebSocket (null si la protección está desactivada).
+  // 3) Token de autenticación para el WebSocket (null si la protección está desactivada).
   const token = createStreamToken();
   const streamUrl = `wss://${host}/media-stream${
     token ? `?token=${encodeURIComponent(token)}` : ''
