@@ -1,0 +1,62 @@
+# Render Blueprint — Agent CV
+#
+# Despliega el backend como un "web service" de Node conectado a este repo de GitHub.
+# Docs: https://render.com/docs/blueprint-spec
+#
+# IMPORTANTE:
+#  - Plan `starter`: instancia SIEMPRE despierta. El plan `free` se DUERME tras 15 min
+#    sin tráfico y tarda ~1 min en despertar, lo que haría fallar las llamadas entrantes.
+#  - Los secretos van con `sync: false`: NO se guardan aquí; se rellenan en el panel de
+#    Render (Environment) tras crear el servicio. Así nunca acaban en el repositorio.
+#  - `STREAM_TOKEN_SECRET` se genera solo (`generateValue: true`).
+#  - PUBLIC_URL no hace falta fijarla: el código usa RENDER_EXTERNAL_URL automáticamente.
+
+services:
+  - type: web
+    name: agent-cv
+    runtime: node
+    plan: starter
+    region: frankfurt            # cercano a Europa (llamantes ES/UE). Ajustable.
+    branch: main
+    buildCommand: npm ci
+    startCommand: npm start
+    healthCheckPath: /health
+    autoDeploy: true
+    envVars:
+      # --- Config no sensible (valores fijos) ---
+      - key: HOST
+        value: 0.0.0.0           # en la nube sí escuchamos en todas las interfaces
+      - key: LOG_FORMAT
+        value: json              # logs estructurados para el agregador de Render
+      - key: VALIDATE_TWILIO_SIGNATURE
+        value: "true"
+      - key: OPENAI_REALTIME_MODEL
+        value: gpt-realtime-mini
+      - key: OPENAI_VOICE
+        value: alloy
+      - key: OPENAI_TRANSCRIBE_MODEL
+        value: whisper-1
+      - key: OPENAI_SUMMARY_MODEL
+        value: gpt-4o-mini
+      - key: EMAIL_PROVIDER
+        value: resend
+      # --- Secreto generado por Render ---
+      - key: STREAM_TOKEN_SECRET
+        generateValue: true
+      # --- Secretos / datos personales: se rellenan en el panel (sync:false) ---
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: TWILIO_ACCOUNT_SID
+        sync: false
+      - key: TWILIO_AUTH_TOKEN
+        sync: false
+      - key: TWILIO_PHONE_NUMBER   # el número LU cuando Twilio lo apruebe
+        sync: false
+      - key: MY_PERSONAL_NUMBER
+        sync: false
+      - key: EMAIL_API_KEY
+        sync: false
+      - key: EMAIL_FROM
+        sync: false
+      - key: EMAIL_TO
+        sync: false

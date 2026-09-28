@@ -30,7 +30,10 @@ export const config = {
   // despliegue a la nube (Fase 7) hay que poner HOST=0.0.0.0 para aceptar tráfico
   // externo, que es donde sí tiene sentido.
   host: process.env.HOST || '127.0.0.1',
-  publicUrl: process.env.PUBLIC_URL || '',
+  // URL pública del backend. En Render, si no se define PUBLIC_URL, usamos la que la
+  // plataforma inyecta automáticamente (RENDER_EXTERNAL_URL). Se usa para construir la
+  // URL wss:// del <Stream> y para validar la firma de Twilio.
+  publicUrl: process.env.PUBLIC_URL || process.env.RENDER_EXTERNAL_URL || '',
 
   // Formato de los logs: 'text' (legible, dev) o 'json' (agregadores, producción).
   logFormat: (process.env.LOG_FORMAT || 'text').toLowerCase() === 'json' ? 'json' : 'text',
