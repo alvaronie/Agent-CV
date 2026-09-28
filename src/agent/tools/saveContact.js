@@ -1,7 +1,7 @@
-// Tool: guardar los datos de contacto de quien llama para devolverle la llamada.
+// Tool: save the caller's contact details so we can call them back.
 //
-// Recoge nombre, empresa, teléfono, email y motivo, y los persiste con storage.js.
-// El modelo debe confirmar los datos con el llamante antes de invocar esta tool.
+// Collects name, company, phone, email and reason, and persists them with storage.js.
+// The model must confirm the details with the caller before calling this tool.
 
 import { saveContact as persistContact } from '../../services/storage.js';
 import { logger } from '../../utils/logger.js';

@@ -1,15 +1,15 @@
-// Limitador de admisión de llamadas (Fase 6): guardarraíl de coste.
+// Call admission limiter (Phase 6): cost guardrail.
 //
-// Lleva la cuenta de:
-//   - llamadas ACTIVAS a la vez (concurrencia), y
-//   - llamadas aceptadas en el día (se reinicia a medianoche UTC).
+// Tracks:
+//   - ACTIVE calls at once (concurrency), and
+//   - calls accepted during the day (resets at midnight UTC).
 //
-// Se consulta en el webhook /incoming-call ANTES de aceptar la llamada (así rechazamos
-// sin abrir el WebSocket ni conectar con OpenAI). El recuento de activas sube al empezar
-// el stream y baja al cerrarse. Un valor de 0 en la config significa "sin límite".
+// It is consulted in the /incoming-call webhook BEFORE accepting the call (so we reject
+// without opening the WebSocket or connecting to OpenAI). The active count goes up when
+// the stream starts and down when it closes. A value of 0 in the config means "no limit".
 //
-// El estado vive en memoria del proceso: suficiente para un despliegue de una sola
-// instancia (nuestro caso). Con varias instancias haría falta un contador compartido.
+// State lives in the process memory: enough for a single-instance deployment (our case).
+// With multiple instances a shared counter would be needed.
 
 import { config } from '../config/index.js';
 import { logger } from '../utils/logger.js';
@@ -19,7 +19,7 @@ let callsToday = 0;
 let dayKey = todayKey();
 
 function todayKey(now = new Date()) {
-  return now.toISOString().slice(0, 10); // YYYY-MM-DD en UTC
+  return now.toISOString().slice(0, 10); // YYYY-MM-DD in UTC
 }
 
 function rolloverIfNeeded(now) {
@@ -31,7 +31,7 @@ function rolloverIfNeeded(now) {
 }
 
 /**
- * ¿Podemos aceptar una nueva llamada ahora mismo?
+ * Can we accept a new call right now?
  * @param {Date} [now]
  * @returns {{ok: boolean, reason?: 'concurrency'|'daily'}}
  */
@@ -48,21 +48,21 @@ export function canAcceptCall(now = new Date()) {
   return { ok: true };
 }
 
-/** Registra el inicio de una llamada (sube concurrencia y cuenta diaria). */
+/** Registers the start of a call (increments concurrency and the daily count). */
 export function registerCallStart(now = new Date()) {
   rolloverIfNeeded(now);
   activeCalls += 1;
   callsToday += 1;
-  logger.info(`[limiter] llamada iniciada (activas=${activeCalls}, hoy=${callsToday})`);
+  logger.info(`[limiter] call started (active=${activeCalls}, today=${callsToday})`);
 }
 
-/** Registra el fin de una llamada (baja concurrencia). */
+/** Registers the end of a call (decrements concurrency). */
 export function registerCallEnd() {
   if (activeCalls > 0) activeCalls -= 1;
-  logger.info(`[limiter] llamada finalizada (activas=${activeCalls})`);
+  logger.info(`[limiter] call ended (active=${activeCalls})`);
 }
 
-// --- Utilidades para tests (no usar en producción) ---
+// --- Test helpers (do not use in production) ---
 export function _reset() {
   activeCalls = 0;
   callsToday = 0;

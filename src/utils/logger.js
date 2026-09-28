@@ -1,6 +1,6 @@
-// Logger estructurado ligero (Fase 6). Añade timestamp y nivel a cada línea, con
-// formato de texto legible por defecto o JSON (LOG_FORMAT=json) para producción.
-// Sin dependencias: usa console por debajo. El formateo vive en logFormat.js (testeable).
+// Lightweight structured logger (Phase 6). Adds a timestamp and level to each line, in
+// a readable text format by default or JSON (LOG_FORMAT=json) for production.
+// No dependencies: uses console underneath. Formatting lives in logFormat.js (testable).
 
 import { config } from '../config/index.js';
 import { formatLog } from './logFormat.js';

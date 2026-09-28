@@ -1,15 +1,15 @@
-// Política de reconexión del WebSocket de OpenAI (Fase 6).
+// OpenAI WebSocket reconnection policy (Phase 6).
 //
-// Función pura (sin red ni estado): dado el número de intentos ya realizados y el
-// máximo permitido, decide si reintentar y con cuánto retardo (backoff exponencial
-// acotado). Se aísla aquí para poder probarla sin abrir ninguna conexión.
+// Pure function (no network or state): given the number of attempts already made and
+// the maximum allowed, decides whether to retry and with how much delay (bounded
+// exponential backoff). Isolated here so it can be tested without opening any connection.
 
 /**
  * @param {object} opts
- * @param {number} opts.attempt - intentos de reconexión ya consumidos (0 = ninguno aún)
- * @param {number} opts.maxAttempts - máximo de reintentos permitidos
- * @param {number} [opts.baseDelayMs] - retardo base
- * @param {number} [opts.maxDelayMs] - retardo máximo (tope del backoff)
+ * @param {number} opts.attempt - reconnection attempts already consumed (0 = none yet)
+ * @param {number} opts.maxAttempts - maximum retries allowed
+ * @param {number} [opts.baseDelayMs] - base delay
+ * @param {number} [opts.maxDelayMs] - maximum delay (backoff cap)
  * @returns {{shouldReconnect: boolean, delayMs: number}}
  */
 export function nextReconnect({

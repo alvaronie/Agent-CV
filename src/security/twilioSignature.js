@@ -1,19 +1,19 @@
-// Validación de la firma de Twilio (`X-Twilio-Signature`) en el webhook /incoming-call.
+// Twilio signature validation (`X-Twilio-Signature`) on the /incoming-call webhook.
 //
-// Twilio firma cada petición al webhook con HMAC-SHA1 sobre la URL completa (más los
-// campos del formulario en un POST), usando el Auth Token de la cuenta como clave.
-// Verificarla evita que un tercero que descubra la URL del webhook nos suplante y
-// dispare llamadas (y coste). Usamos el validador del SDK oficial (`twilio.validateRequest`).
+// Twilio signs every webhook request with HMAC-SHA1 over the full URL (plus the form
+// fields on a POST), using the account Auth Token as the key. Verifying it prevents a
+// third party who discovers the webhook URL from impersonating Twilio and triggering
+// calls (and cost). We use the official SDK validator (`twilio.validateRequest`).
 //
-// Reto de la URL: la firma se calcula sobre la URL EXACTA que Twilio invocó, que detrás
-// de un túnel/proxy no coincide con el host local. Por eso preferimos `PUBLIC_URL` (la
-// URL pública real) y, si no está, reconstruimos desde las cabeceras de proxy.
+// URL challenge: the signature is computed over the EXACT URL Twilio called, which
+// behind a tunnel/proxy does not match the local host. That's why we prefer `PUBLIC_URL`
+// (the real public URL) and, if absent, rebuild it from the proxy headers.
 
 import twilio from 'twilio';
 import { config } from '../config/index.js';
 
 /**
- * Reconstruye la URL absoluta que Twilio usó para llamar al webhook.
+ * Rebuilds the absolute URL Twilio used to call the webhook.
  * @param {import('fastify').FastifyRequest} request
  * @returns {string}
  */
@@ -29,8 +29,8 @@ export function buildRequestUrl(request) {
 }
 
 /**
- * ¿La petición viene firmada válidamente por Twilio?
- * Sin Auth Token o sin cabecera de firma, devuelve false (no se puede verificar).
+ * Is the request validly signed by Twilio?
+ * Without an Auth Token or a signature header, returns false (cannot be verified).
  * @param {import('fastify').FastifyRequest} request
  * @returns {boolean}
  */

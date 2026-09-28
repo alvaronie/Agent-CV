@@ -1,8 +1,8 @@
-// Tests de src/security/twilioSignature.js — validación de X-Twilio-Signature.
+// Tests for src/security/twilioSignature.js — X-Twilio-Signature validation.
 //
-// Generamos firmas válidas con el MISMO algoritmo documentado por Twilio
-// (HMAC-SHA1 sobre url + params ordenados, en base64) para comprobar que nuestro
-// envoltorio construye bien la URL y pasa los parámetros. No hay red.
+// We generate valid signatures with the SAME algorithm documented by Twilio (HMAC-SHA1
+// over url + sorted params, base64) to check that our wrapper builds the URL and passes
+// the parameters correctly. No network.
 
 import { test, describe, beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
@@ -11,10 +11,10 @@ import crypto from 'node:crypto';
 import { isValidTwilioRequest, buildRequestUrl } from '../src/security/twilioSignature.js';
 import { config } from '../src/config/index.js';
 
-const AUTH_TOKEN = 'token-de-prueba';
+const AUTH_TOKEN = 'test-token';
 const PUBLIC_URL = 'https://example.ngrok.app';
 
-// Firma una petición como lo haría Twilio (algoritmo oficial para POST).
+// Signs a request the way Twilio would (official algorithm for POST).
 function twilioSign(authToken, url, params) {
   const data = Object.keys(params)
     .sort()
@@ -44,47 +44,47 @@ describe('isValidTwilioRequest', () => {
     config.publicUrl = original.publicUrl;
   });
 
-  test('acepta una petición firmada correctamente', () => {
+  test('accepts a correctly signed request', () => {
     const body = { From: '+34600000000', To: '+35227642973', CallSid: 'CA123' };
     const signature = twilioSign(AUTH_TOKEN, `${PUBLIC_URL}/incoming-call`, body);
     assert.equal(isValidTwilioRequest(makeRequest({ body, signature })), true);
   });
 
-  test('rechaza si falta la cabecera de firma', () => {
+  test('rejects when the signature header is missing', () => {
     const body = { From: '+34600000000' };
     assert.equal(isValidTwilioRequest(makeRequest({ body })), false);
   });
 
-  test('rechaza una firma incorrecta', () => {
+  test('rejects an incorrect signature', () => {
     const body = { From: '+34600000000' };
     assert.equal(
-      isValidTwilioRequest(makeRequest({ body, signature: 'firma-invalida' })),
+      isValidTwilioRequest(makeRequest({ body, signature: 'invalid-signature' })),
       false
     );
   });
 
-  test('rechaza si el cuerpo cambia respecto al firmado (anti-tamper)', () => {
+  test('rejects if the body changes from what was signed (anti-tamper)', () => {
     const body = { From: '+34600000000', CallSid: 'CA123' };
     const signature = twilioSign(AUTH_TOKEN, `${PUBLIC_URL}/incoming-call`, body);
     const tampered = { ...body, From: '+34699999999' };
     assert.equal(isValidTwilioRequest(makeRequest({ body: tampered, signature })), false);
   });
 
-  test('sin Auth Token no se puede verificar: devuelve false', () => {
+  test('without an Auth Token it cannot verify: returns false', () => {
     config.twilio.authToken = '';
     const body = { From: '+34600000000' };
     const signature = twilioSign(AUTH_TOKEN, `${PUBLIC_URL}/incoming-call`, body);
     assert.equal(isValidTwilioRequest(makeRequest({ body, signature })), false);
   });
 
-  test('buildRequestUrl usa PUBLIC_URL cuando está definido', () => {
+  test('buildRequestUrl uses PUBLIC_URL when defined', () => {
     assert.equal(
       buildRequestUrl({ url: '/incoming-call', headers: {} }),
       `${PUBLIC_URL}/incoming-call`
     );
   });
 
-  test('buildRequestUrl cae a las cabeceras si no hay PUBLIC_URL', () => {
+  test('buildRequestUrl falls back to headers if there is no PUBLIC_URL', () => {
     config.publicUrl = '';
     const url = buildRequestUrl({
       url: '/incoming-call',

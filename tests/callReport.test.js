@@ -1,7 +1,11 @@
-// Tests de src/services/callReport.js — el cierre de llamada de la Fase 5.
+// Tests for src/services/callReport.js — the Phase 5 call teardown.
 //
-// Las tres dependencias (resumen, email, persistencia) se inyectan, así que esto prueba
-// el flujo completo sin llamada real, sin OpenAI, sin Resend y sin escribir en disco.
+// The three dependencies (summary, email, persistence) are injected, so this exercises
+// the full flow without a real call, without OpenAI, without Resend and without writing
+// to disk.
+//
+// NOTE: the summary email is Spanish by design, so some assertions check Spanish content
+// (header labels, fallback subject). That is expected behavior.
 
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
@@ -22,7 +26,7 @@ const CALL = {
   durationSeconds: 90,
 };
 
-/** Dobles que registran lo que reciben. */
+/** Doubles that record what they receive. */
 function makeDeps({ summaryImpl } = {}) {
   const calls = { summary: [], email: [], saved: [] };
   const deps = {
@@ -45,7 +49,7 @@ function makeDeps({ summaryImpl } = {}) {
 }
 
 describe('reportCall', () => {
-  test('resume, envía el email y guarda el registro', async () => {
+  test('summarizes, sends the email and saves the record', async () => {
     const { deps, calls } = makeDeps();
     const result = await reportCall(CALL, deps);
 
@@ -58,7 +62,7 @@ describe('reportCall', () => {
     assert.equal(calls.email[0].subject, 'Marta (Acme) deja contacto');
   });
 
-  test('el email lleva una cabecera con llamante, fecha y duración', async () => {
+  test('the email has a header with caller, date and duration', async () => {
     const { deps, calls } = makeDeps();
     await reportCall(CALL, deps);
 
@@ -68,20 +72,20 @@ describe('reportCall', () => {
     assert.match(body, /Quién llamó: Marta\./);
   });
 
-  test('el registro guardado NO contiene la transcripción (D11)', async () => {
+  test('the saved record does NOT contain the transcript (D11)', async () => {
     const { deps, calls } = makeDeps();
     await reportCall(CALL, deps);
 
     const record = calls.saved[0];
     const serialized = JSON.stringify(record);
 
-    // Ni el texto de los turnos ni ningún campo que lo transporte.
+    // Neither the turn text nor any field carrying it.
     assert.doesNotMatch(serialized, /marta@acme\.com/);
     assert.doesNotMatch(serialized, /voice assistant/);
     assert.equal(record.turns, undefined);
     assert.equal(record.transcript, undefined);
 
-    // Y sí contiene los metadatos y el resumen.
+    // And it does contain the metadata and the summary.
     assert.deepEqual(Object.keys(record).sort(), [
       'callSid',
       'durationSeconds',
@@ -96,7 +100,7 @@ describe('reportCall', () => {
     assert.equal(record.summary, 'Quién llamó: Marta.');
   });
 
-  test('sin turnos: registra la llamada pero no manda email', async () => {
+  test('no turns: records the call but does not send an email', async () => {
     const { deps, calls } = makeDeps();
     const result = await reportCall({ ...CALL, turns: [] }, deps);
 
@@ -108,7 +112,7 @@ describe('reportCall', () => {
     assert.equal(calls.saved[0].turnCount, 0);
   });
 
-  test('si el resumen falla, manda la transcripción y guarda summary=null', async () => {
+  test('if the summary fails, sends the transcript and saves summary=null', async () => {
     const { deps, calls } = makeDeps({
       summaryImpl: async () => {
         throw new Error('OpenAI caído');
@@ -122,12 +126,12 @@ describe('reportCall', () => {
     assert.match(calls.email[0].body, /OpenAI caído/);
     assert.match(calls.email[0].body, /LLAMANTE: Hi, I am Marta from Acme\./);
 
-    // En disco no queda resumen, y tampoco la transcripción.
+    // On disk no summary is left, and neither is the transcript.
     assert.equal(result.summary, null);
     assert.doesNotMatch(JSON.stringify(calls.saved[0]), /marta@acme\.com/);
   });
 
-  test('un fallo al persistir no rompe el cierre', async () => {
+  test('a persistence failure does not break the teardown', async () => {
     const { deps, calls } = makeDeps();
     deps.saveCallRecord = async () => {
       throw new Error('disco lleno');

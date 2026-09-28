@@ -1,9 +1,9 @@
-// Tool: transferir la llamada viva al móvil personal del titular del CV.
+// Tool: transfer the live call to the CV owner's personal phone.
 //
-// Redirigimos la llamada en curso vía la API REST de Twilio: actualizamos la llamada
-// (por su callSid) con TwiML <Dial> hacia el número personal. Al hacerlo, Twilio
-// termina el <Connect><Stream> actual y marca al móvil; nuestro puente de audio se
-// cierra solo cuando Twilio cierra el WebSocket de Media Streams.
+// We redirect the in-progress call via the Twilio REST API: we update the call (by its
+// callSid) with TwiML <Dial> to the personal number. Doing so, Twilio ends the current
+// <Connect><Stream> and dials the phone; our audio bridge closes on its own when Twilio
+// closes the Media Streams WebSocket.
 
 import twilio from 'twilio';
 import { twilioClient } from '../../telephony/twilioClient.js';
@@ -46,7 +46,7 @@ export const transferCallTool = {
 
       await twilioClient.calls(ctx.callSid).update({ twiml: vr.toString() });
       logger.info(
-        `[tool:transfer_call] ${ctx.callSid} -> móvil (motivo: ${args?.reason ?? 'n/d'})`
+        `[tool:transfer_call] ${ctx.callSid} -> mobile (reason: ${args?.reason ?? 'n/a'})`
       );
       return 'Transfer initiated. Connecting the caller to Álvaro now.';
     } catch (err) {

@@ -1,5 +1,5 @@
-// Tests de src/agent/prompt.js — el system prompt incluye las reglas clave y el CV.
-// Solo lee ficheros locales: sin red ni WebSocket.
+// Tests for src/agent/prompt.js — the system prompt includes the key rules and the CV.
+// Only reads local files: no network or WebSocket.
 
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
@@ -7,7 +7,7 @@ import assert from 'node:assert/strict';
 import { buildInstructions } from '../src/agent/prompt.js';
 
 describe('buildInstructions', () => {
-  test('incluye la sección de seguridad anti prompt-injection', async () => {
+  test('includes the anti prompt-injection security section', async () => {
     const p = await buildInstructions();
     assert.match(p, /Security and boundaries/i);
     assert.match(p, /ignore your\s*[\s\S]*previous instructions/i);
@@ -15,15 +15,15 @@ describe('buildInstructions', () => {
     assert.match(p, /Never output secrets, API keys, tokens/i);
   });
 
-  test('mantiene la regla de idioma (inglés por defecto) y anti-invención', async () => {
+  test('keeps the language rule (English by default) and anti-fabrication', async () => {
     const p = await buildInstructions();
     assert.match(p, /Default to ENGLISH/);
     assert.match(p, /Only use information from the CV/i);
   });
 
-  test('incorpora el contenido del CV (fuente de verdad)', async () => {
+  test('embeds the CV content (source of truth)', async () => {
     const p = await buildInstructions();
-    // El CV real contiene el nombre del titular.
+    // The real CV contains the owner's name.
     assert.match(p, /Álvaro Nieto Balmori/);
   });
 });

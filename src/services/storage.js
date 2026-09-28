@@ -1,11 +1,11 @@
-// Persistencia de contactos y registros de llamada.
+// Persistence of contacts and call records.
 //
-// Para empezar guardamos en ficheros JSONL (una línea JSON por registro) dentro de
-// data/. Es simple, sin dependencias y fácil de inspeccionar. Más adelante se puede
-// cambiar por DynamoDB / Postgres sin tocar los llamadores (misma firma de funciones).
+// To start with we save to JSONL files (one JSON line per record) inside data/. It is
+// simple, dependency-free and easy to inspect. Later it can be swapped for
+// DynamoDB / Postgres without touching the callers (same function signatures).
 //
-// NOTA (PII): contacts.jsonl contiene datos personales de terceros. Está en .gitignore
-// y no debe subirse al repositorio.
+// NOTE (PII): contacts.jsonl contains third-party personal data. It is in .gitignore and
+// must not be pushed to the repository.
 
 import { mkdir, appendFile } from 'node:fs/promises';
 import path from 'node:path';
@@ -22,25 +22,25 @@ async function appendJson(file, obj) {
 }
 
 /**
- * Guarda los datos de contacto de quien llama.
+ * Saves the caller's contact details.
  * @param {{name?:string, company?:string, phone?:string, email?:string, reason?:string, callSid?:string}} contact
  */
 export async function saveContact(contact) {
   const record = { ...contact, savedAt: new Date().toISOString() };
   await appendJson(CONTACTS_FILE, record);
-  // No logueamos el nombre ni otros datos del contacto: son PII de terceros. Solo el
-  // callSid (identificador interno) para poder correlacionar sin exponer datos.
-  logger.info(`[storage] contacto guardado (callSid=${contact?.callSid ?? 's/callSid'})`);
+  // We do not log the name or other contact fields: they are third-party PII. Only the
+  // callSid (internal identifier), so we can correlate without exposing data.
+  logger.info(`[storage] contact saved (callSid=${contact?.callSid ?? 'no-callSid'})`);
   return record;
 }
 
 /**
- * Guarda un registro de la llamada (metadatos, duración, transcripción...).
+ * Saves a call record (metadata, duration, summary...).
  * @param {object} record
  */
 export async function saveCallRecord(record) {
   const row = { ...record, savedAt: new Date().toISOString() };
   await appendJson(CALLS_FILE, row);
-  logger.info(`[storage] registro de llamada guardado (${record?.callSid ?? 's/callSid'})`);
+  logger.info(`[storage] call record saved (${record?.callSid ?? 'no-callSid'})`);
   return row;
 }

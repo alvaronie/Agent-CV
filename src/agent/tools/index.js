@@ -1,10 +1,10 @@
-// Registro central de tools del agente.
+// Central registry of the agent's tools.
 //
-// - toolDefinitions: array de definiciones (JSON schema) que se envía a OpenAI en la
-//   session.update para que el modelo sepa qué tools puede invocar.
-// - dispatchToolCall: recibe el evento de function call de la Realtime API y su contexto
-//   (callSid, streamSid, twilioWs, realtime, endCall), ejecuta el handler adecuado y
-//   devuelve { output, triggerResponse } para que el puente responda al modelo.
+// - toolDefinitions: array of definitions (JSON schema) sent to OpenAI in the
+//   session.update so the model knows which tools it can call.
+// - dispatchToolCall: receives the Realtime API function-call event and its context
+//   (callSid, streamSid, twilioWs, realtime, endCall), runs the right handler and
+//   returns { output, triggerResponse } so the bridge can reply to the model.
 
 import { transferCallTool } from './transferCall.js';
 import { saveContactTool } from './saveContact.js';
@@ -17,9 +17,9 @@ export const toolDefinitions = tools.map((t) => t.definition);
 const byName = new Map(tools.map((t) => [t.definition.name, t]));
 
 /**
- * Ejecuta la tool indicada por un evento `response.function_call_arguments.done`.
+ * Runs the tool indicated by a `response.function_call_arguments.done` event.
  * @param {{name:string, call_id:string, arguments?:string}} event
- * @param {object} ctx - Contexto de la llamada viva.
+ * @param {object} ctx - Live call context.
  * @returns {Promise<{output:string, triggerResponse:boolean}>}
  */
 export async function dispatchToolCall(event, ctx) {
@@ -33,7 +33,7 @@ export async function dispatchToolCall(event, ctx) {
     try {
       args = JSON.parse(event.arguments);
     } catch {
-      // Argumentos malformados: seguimos con objeto vacío; el handler decidirá.
+      // Malformed arguments: continue with an empty object; the handler will decide.
     }
   }
 

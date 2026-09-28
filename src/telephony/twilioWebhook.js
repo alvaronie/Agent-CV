@@ -1,17 +1,17 @@
-// Webhook de llamada entrante de Twilio.
+// Twilio incoming-call webhook.
 //
-// Respondemos con TwiML <Connect><Stream> para abrir un WebSocket bidireccional
-// (Media Streams) hacia nuestra ruta /media-stream. A partir de ahí, el audio de la
-// llamada viaja en tiempo real hacia OpenAI Realtime y vuelve como voz del agente.
+// We respond with TwiML <Connect><Stream> to open a bidirectional WebSocket
+// (Media Streams) to our /media-stream route. From there, the call audio flows in real
+// time to OpenAI Realtime and comes back as the agent's voice.
 //
-// La URL del Stream debe ser absoluta y segura (wss://). La derivamos del host
-// público por el que Twilio nos ha llamado (o de PUBLIC_URL si está definido).
+// The Stream URL must be absolute and secure (wss://). We derive it from the public host
+// Twilio called us on (or from PUBLIC_URL if defined).
 //
-// SEGURIDAD (Fase 6):
-//   1. Validamos la firma `X-Twilio-Signature`: si no es una petición legítima de
-//      Twilio, respondemos 403 y no emitimos TwiML.
-//   2. Incrustamos en la URL del <Stream> un token firmado y con caducidad, que
-//      /media-stream verifica al abrirse (así solo Twilio puede abrir el WebSocket).
+// SECURITY (Phase 6):
+//   1. We validate the `X-Twilio-Signature`: if it is not a legitimate Twilio request,
+//      we respond 403 and do not emit TwiML.
+//   2. We embed a signed, expiring token in the <Stream> URL, which /media-stream
+//      verifies on open (so only Twilio can open the WebSocket).
 
 import twilio from 'twilio';
 import { config } from '../config/index.js';
@@ -23,18 +23,18 @@ import { canAcceptCall } from './callLimiter.js';
 const VoiceResponse = twilio.twiml.VoiceResponse;
 
 export function handleIncomingCall(request, reply) {
-  // 1) Verificación de firma de Twilio (salvo que se desactive para pruebas locales).
+  // 1) Twilio signature check (unless disabled for local testing).
   if (config.security.validateTwilioSignature && !isValidTwilioRequest(request)) {
-    logger.warn('[webhook] firma de Twilio inválida o ausente; petición rechazada');
+    logger.warn('[webhook] invalid or missing Twilio signature; request rejected');
     reply.code(403).header('Content-Type', 'text/plain');
     return reply.send('Forbidden');
   }
 
-  // 2) Límite de admisión (concurrencia / tope diario): guardarraíl de coste. Si estamos
-  // al límite, respondemos con una locución breve y colgamos, sin abrir el stream.
+  // 2) Admission limit (concurrency / daily cap): cost guardrail. If we are at the
+  // limit, respond with a short spoken message and hang up, without opening the stream.
   const admission = canAcceptCall();
   if (!admission.ok) {
-    logger.warn(`[webhook] llamada rechazada por límite: ${admission.reason}`);
+    logger.warn(`[webhook] call rejected by limit: ${admission.reason}`);
     const busy = new VoiceResponse();
     busy.say(
       { language: 'en-US' },
@@ -45,12 +45,12 @@ export function handleIncomingCall(request, reply) {
     return reply.send(busy.toString());
   }
 
-  // Host público: preferimos PUBLIC_URL si está configurado; si no, el host de la petición.
+  // Public host: prefer PUBLIC_URL if configured; otherwise the request host.
   const host = config.publicUrl
     ? config.publicUrl.replace(/^https?:\/\//, '').replace(/\/$/, '')
     : request.headers.host;
 
-  // 3) Token de autenticación para el WebSocket (null si la protección está desactivada).
+  // 3) Authentication token for the WebSocket (null if protection is disabled).
   const token = createStreamToken();
   const streamUrl = `wss://${host}/media-stream${
     token ? `?token=${encodeURIComponent(token)}` : ''
@@ -60,8 +60,8 @@ export function handleIncomingCall(request, reply) {
   const connect = vr.connect();
   const stream = connect.stream({ url: streamUrl });
 
-  // Pasamos el número del llamante al WebSocket: el evento `start` de Media Streams no
-  // lo incluye, y lo queremos para el resumen por email (Fase 5).
+  // Pass the caller's number to the WebSocket: the Media Streams `start` event does not
+  // include it, and we want it for the email summary (Phase 5).
   const from = request.body?.From || request.query?.From || '';
   if (from) {
     stream.parameter({ name: 'from', value: from });

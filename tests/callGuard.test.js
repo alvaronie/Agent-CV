@@ -1,12 +1,12 @@
-// Tests de src/telephony/callGuard.js — silencio y máximo de turnos.
-// Temporizadores inyectados: no hay red, WebSocket ni esperas reales.
+// Tests for src/telephony/callGuard.js — silence and max caller turns.
+// Injected timers: no network, WebSocket or real waiting.
 
 import { test, describe, beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
 
 import { createCallGuard } from '../src/telephony/callGuard.js';
 
-// Temporizador falso controlable: guarda el callback y permite dispararlo a mano.
+// Controllable fake timer: stores the callback and lets us fire it by hand.
 function fakeTimers() {
   let pending = null;
   let nextId = 1;
@@ -44,13 +44,13 @@ describe('createCallGuard', () => {
     });
   }
 
-  test('start() arma el timer de silencio', () => {
+  test('start() arms the silence timer', () => {
     const guard = makeGuard();
     guard.start();
     assert.equal(guard._state().armed, true);
   });
 
-  test('al agotarse el silencio invoca onSilence', () => {
+  test('when the silence timeout elapses it calls onSilence', () => {
     let fired = 0;
     const guard = makeGuard({ onSilence: () => (fired += 1) });
     guard.start();
@@ -58,42 +58,42 @@ describe('createCallGuard', () => {
     assert.equal(fired, 1);
   });
 
-  test('activity() reinicia el timer (no dispara silencio si hay actividad)', () => {
+  test('activity() resets the timer (no silence fired while there is activity)', () => {
     let fired = 0;
     const guard = makeGuard({ onSilence: () => (fired += 1) });
     guard.start();
-    guard.activity(); // reinicia: el timer anterior se limpió
+    guard.activity(); // resets: the previous timer was cleared
     assert.equal(guard._state().armed, true);
     assert.equal(fired, 0);
   });
 
-  test('countCallerTurn devuelve true y avisa al superar el máximo', () => {
+  test('countCallerTurn returns true and notifies when the maximum is exceeded', () => {
     let maxed = 0;
     const guard = makeGuard({ onMaxTurns: () => (maxed += 1) });
     assert.equal(guard.countCallerTurn(), false); // 1
     assert.equal(guard.countCallerTurn(), false); // 2
-    assert.equal(guard.countCallerTurn(), true); // 3 -> límite
+    assert.equal(guard.countCallerTurn(), true); // 3 -> limit
     assert.equal(maxed, 1);
     assert.equal(guard._state().callerTurns, 3);
   });
 
-  test('stop() cancela el timer y evita disparos posteriores', () => {
+  test('stop() cancels the timer and prevents later triggers', () => {
     let fired = 0;
     const guard = makeGuard({ onSilence: () => (fired += 1) });
     guard.start();
     guard.stop();
     assert.equal(guard._state().armed, false);
-    timers.fire(); // aunque hubiera algo, stopped lo bloquea
+    timers.fire(); // even if something were there, stopped blocks it
     assert.equal(fired, 0);
   });
 
-  test('silenceMs=0 desactiva el timeout por silencio', () => {
+  test('silenceMs=0 disables the silence timeout', () => {
     const guard = makeGuard({ silenceMs: 0 });
     guard.start();
     assert.equal(guard._state().armed, false);
   });
 
-  test('maxCallerTurns=0 desactiva el límite de turnos', () => {
+  test('maxCallerTurns=0 disables the turn limit', () => {
     const guard = makeGuard({ maxCallerTurns: 0 });
     for (let i = 0; i < 10; i += 1) assert.equal(guard.countCallerTurn(), false);
   });

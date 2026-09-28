@@ -1,5 +1,5 @@
-// Tests de src/security/streamToken.js — token HMAC con caducidad para /media-stream.
-// No hay red ni estado externo: todo es cómputo local con un secreto de prueba.
+// Tests for src/security/streamToken.js — HMAC token with expiry for /media-stream.
+// No network or external state: all local computation with a test secret.
 
 import { test, describe, beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
@@ -12,7 +12,7 @@ describe('streamToken', () => {
 
   beforeEach(() => {
     original = { ...config.security };
-    config.security.streamTokenSecret = 'secreto-de-prueba';
+    config.security.streamTokenSecret = 'test-secret';
     config.security.streamTokenTtlSeconds = 300;
   });
 
@@ -20,53 +20,53 @@ describe('streamToken', () => {
     Object.assign(config.security, original);
   });
 
-  test('un token recién creado se verifica como válido', () => {
+  test('a freshly created token verifies as valid', () => {
     const token = createStreamToken();
     assert.equal(typeof token, 'string');
     assert.equal(verifyStreamToken(token).valid, true);
   });
 
-  test('token ausente o vacío es inválido', () => {
+  test('a missing or empty token is invalid', () => {
     assert.deepEqual(verifyStreamToken(undefined), { valid: false, reason: 'missing' });
     assert.deepEqual(verifyStreamToken(''), { valid: false, reason: 'missing' });
   });
 
-  test('token con formato incorrecto es inválido', () => {
-    assert.deepEqual(verifyStreamToken('sinpunto'), { valid: false, reason: 'malformed' });
+  test('a malformed token is invalid', () => {
+    assert.deepEqual(verifyStreamToken('nodot'), { valid: false, reason: 'malformed' });
   });
 
-  test('firma manipulada es inválida', () => {
+  test('a tampered signature is invalid', () => {
     const token = createStreamToken();
     const [data] = token.split('.');
-    const tampered = `${data}.firmafalsa`;
+    const tampered = `${data}.fakesignature`;
     assert.equal(verifyStreamToken(tampered).valid, false);
   });
 
-  test('payload manipulado (misma longitud de firma) no cuela', () => {
+  test('a tampered payload (same signature) does not pass', () => {
     const token = createStreamToken();
-    const [data, sig] = token.split('.');
-    // Cambiamos el payload pero mantenemos la firma antigua: debe fallar la firma.
-    const otroData = Buffer.from(JSON.stringify({ exp: 9999999999 })).toString('base64url');
-    assert.equal(verifyStreamToken(`${otroData}.${sig}`).valid, false);
+    const [, sig] = token.split('.');
+    // Change the payload but keep the old signature: the signature check must fail.
+    const otherData = Buffer.from(JSON.stringify({ exp: 9999999999 })).toString('base64url');
+    assert.equal(verifyStreamToken(`${otherData}.${sig}`).valid, false);
   });
 
-  test('token caducado es inválido', () => {
-    // Creado en un instante muy anterior; ya expiró respecto a "ahora".
-    const pasado = Date.now() - 10 * 60 * 1000; // hace 10 min
-    const token = createStreamToken(pasado);
+  test('an expired token is invalid', () => {
+    // Created at a much earlier instant; already expired relative to "now".
+    const past = Date.now() - 10 * 60 * 1000; // 10 min ago
+    const token = createStreamToken(past);
     const result = verifyStreamToken(token);
     assert.deepEqual(result, { valid: false, reason: 'expired' });
   });
 
-  test('sin secreto configurado, la verificación queda desactivada (dev)', () => {
+  test('with no secret configured, verification is disabled (dev)', () => {
     config.security.streamTokenSecret = '';
     assert.equal(createStreamToken(), null);
     assert.deepEqual(verifyStreamToken(undefined), { valid: true, reason: 'disabled' });
   });
 
-  test('token firmado con otro secreto no se acepta', () => {
+  test('a token signed with a different secret is not accepted', () => {
     const token = createStreamToken();
-    config.security.streamTokenSecret = 'otro-secreto-distinto';
+    config.security.streamTokenSecret = 'another-different-secret';
     assert.equal(verifyStreamToken(token).valid, false);
   });
 });

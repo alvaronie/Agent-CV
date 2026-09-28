@@ -1,24 +1,29 @@
-// Genera el resumen de una llamada a partir de sus turnos, usando un modelo de texto.
+// Generates the summary of a call from its turns, using a text model.
 //
-// La transcripción es material de paso: entra aquí, se convierte en resumen y el puente
-// la descarta (decisión D11). Este módulo NO la guarda en ningún sitio.
+// The transcript is transient material: it comes in here, is turned into a summary, and
+// the bridge discards it (decision D11). This module does NOT store it anywhere.
 //
-// Usamos la API de Chat Completions con `fetch` (nativo en Node 18+), sin añadir el SDK
-// de OpenAI como dependencia: es una sola petición y así el proyecto sigue ligero.
+// We use the Chat Completions API with `fetch` (native in Node 18+), without adding the
+// OpenAI SDK as a dependency: it is a single request, keeping the project lightweight.
+//
+// NOTE (language): the summary email is written in Spanish ON PURPOSE, because its
+// recipient is the CV owner. This is the only intentionally non-English text in the code
+// (the strings below define that email's content). The rest of the codebase is English.
 
 import { config } from '../config/index.js';
 import { logger } from '../utils/logger.js';
 
 const CHAT_URL = 'https://api.openai.com/v1/chat/completions';
 
-// Tope de caracteres de transcripción que enviamos al modelo. Una llamada de 10 minutos
-// rara vez pasa de ~8 KB, así que este límite solo actúa como guardarraíl de coste.
+// Cap on transcript characters we send to the model. A 10-minute call rarely exceeds
+// ~8 KB, so this limit only acts as a cost guardrail.
 const MAX_TRANSCRIPT_CHARS = 20000;
 
-// Cuánto esperamos al modelo antes de rendirnos. La llamada ya ha colgado, pero no
-// queremos dejar la petición abierta indefinidamente.
+// How long we wait for the model before giving up. The call has already hung up, but we
+// don't want to leave the request open indefinitely.
 const REQUEST_TIMEOUT_MS = 30000;
 
+// Spanish by design (see note at the top of the file): the summary email is for the CV owner.
 const SYSTEM_PROMPT = `Eres un asistente que resume llamadas telefónicas recibidas por el
 agente de voz del CV de Álvaro. Escribe SIEMPRE en español, aunque la llamada haya sido en
 otro idioma.
@@ -39,7 +44,7 @@ se facilitó. Si la llamada no tuvo contenido real (silencio, error, colgaron al
 dilo en una línea y no rellenes secciones.`;
 
 /**
- * Convierte los turnos acumulados en un texto legible para el modelo.
+ * Turns the accumulated turns into readable text for the model.
  * @param {Array<{role:string, text:string}>} turns
  * @returns {string}
  */
@@ -49,29 +54,30 @@ export function formatTranscript(turns = []) {
     .map((t) => `${t.role === 'caller' ? 'LLAMANTE' : 'AGENTE'}: ${t.text.trim()}`)
     .join('\n');
 
-  // Si hay que recortar, nos quedamos con el final: el cierre de la llamada (contacto,
-  // siguientes pasos) suele ser más valioso que el principio.
+  // If we must trim, keep the end: the end of the call (contact, next steps) is usually
+  // more valuable than the beginning.
   return text.length > MAX_TRANSCRIPT_CHARS ? text.slice(-MAX_TRANSCRIPT_CHARS) : text;
 }
 
 /**
- * Pide al modelo un resumen de la llamada.
+ * Asks the model for a summary of the call.
  *
- * @param {Array<{role:string, text:string}>} turns - Turnos de la conversación.
+ * @param {Array<{role:string, text:string}>} turns - Conversation turns.
  * @param {{callSid?:string, from?:string, startedAt?:string, durationSeconds?:number}} [meta]
  * @returns {Promise<{subject:string, body:string}>}
- * @throws Si falta la API key o la petición falla (el llamador decide cómo degradar).
+ * @throws If the API key is missing or the request fails (the caller decides how to degrade).
  */
 export async function generateSummary(turns, meta = {}) {
   if (!config.openai.apiKey) {
-    throw new Error('OPENAI_API_KEY no configurada');
+    throw new Error('OPENAI_API_KEY not configured');
   }
 
   const transcript = formatTranscript(turns);
   if (!transcript) {
-    throw new Error('no hay transcripción que resumir');
+    throw new Error('no transcript to summarize');
   }
 
+  // Context lines are sent to the model in Spanish, to match the Spanish summary.
   const context = [
     meta.from ? `Número del llamante: ${meta.from}` : null,
     meta.startedAt ? `Inicio: ${meta.startedAt}` : null,
@@ -106,7 +112,7 @@ export async function generateSummary(turns, meta = {}) {
 
   if (!res.ok) {
     const detail = await res.text().catch(() => '');
-    throw new Error(`Chat Completions devolvió ${res.status}: ${detail.slice(0, 300)}`);
+    throw new Error(`Chat Completions returned ${res.status}: ${detail.slice(0, 300)}`);
   }
 
   const data = await res.json();
@@ -116,14 +122,14 @@ export async function generateSummary(turns, meta = {}) {
   try {
     parsed = JSON.parse(raw);
   } catch {
-    // El modelo no devolvió JSON válido: usamos su texto tal cual como cuerpo.
-    logger.warn('[summary] respuesta no era JSON válido, se usa como texto plano');
+    // The model did not return valid JSON: use its text as-is for the body.
+    logger.warn('[summary] response was not valid JSON, using it as plain text');
     parsed = { asunto: '', resumen: raw };
   }
 
   const subject = (parsed.asunto || '').trim() || 'Llamada al agente de CV';
   const body = (parsed.resumen || '').trim() || raw.trim();
 
-  logger.info(`[summary] resumen generado (${body.length} caracteres)`);
+  logger.info(`[summary] summary generated (${body.length} chars)`);
   return { subject, body };
 }

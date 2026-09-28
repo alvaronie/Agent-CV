@@ -1,4 +1,4 @@
-# Scripts auxiliares
+# Helper scripts
 
-Aqui iran scripts de ayuda (p. ej. probar el flujo en local, comprar el numero
-de Twilio por API, o simular una llamada). Pendiente de implementar.
+Helper scripts will go here (e.g. testing the flow locally, buying the Twilio number via
+API, or simulating a call). Not implemented yet.

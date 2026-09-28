@@ -1,11 +1,11 @@
-// Formateo de líneas de log (Fase 6): función pura y testeable (sin consola ni red).
+// Log line formatting (Phase 6): pure, testable function (no console or network).
 //
-// Dos formatos:
-//   - 'text' (por defecto, legible en dev):  "<ISO> <LEVEL> <mensaje>"
-//   - 'json' (para producción/agregadores):  {"ts","level","msg"}
+// Two formats:
+//   - 'text' (default, readable in dev):  "<ISO> <LEVEL> <message>"
+//   - 'json' (for production/aggregators): {"ts","level","msg"}
 //
-// Los argumentos no-string se serializan de forma segura: los Error muestran su stack,
-// los objetos se pasan a JSON, y si algo no es serializable se cae a String().
+// Non-string arguments are serialized safely: Errors show their stack, objects are
+// turned into JSON, and anything non-serializable falls back to String().
 
 function stringifyArg(a) {
   if (typeof a === 'string') return a;

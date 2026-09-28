@@ -1,20 +1,20 @@
-// Puente de audio entre Twilio Media Streams y OpenAI Realtime.
+// Audio bridge between Twilio Media Streams and OpenAI Realtime.
 //
-// Twilio abre un WebSocket con nosotros y nos envía el audio de la llamada en
-// mensajes JSON (eventos: start, media, stop). El audio va en base64, formato
-// G.711 μ-law 8kHz. Como configuramos OpenAI con audio/pcmu (el mismo formato),
-// reenviamos el audio en ambos sentidos SIN reconvertir.
+// Twilio opens a WebSocket with us and sends the call audio in JSON messages (events:
+// start, media, stop). The audio is base64, G.711 μ-law 8kHz format. Since we configure
+// OpenAI with audio/pcmu (the same format), we forward the audio in both directions
+// WITHOUT re-encoding.
 //
-// Flujo:
-//   Twilio media  ─▶ realtime.sendAudio()            (audio del que llama -> modelo)
-//   OpenAI delta  ─▶ twilio { event:'media', ... }   (voz del modelo -> llamada)
-//   barge-in      ─▶ twilio { event:'clear', ... }   (el usuario interrumpe)
-//   function call ─▶ dispatchToolCall(...)           (tools: transferir/contacto/fin)
-//   transcripción ─▶ turns[]                         (subtítulos, solo en memoria)
-//   al colgar     ─▶ resumen (LLM) -> email -> registro   (Fase 5)
+// Flow:
+//   Twilio media  ─▶ realtime.sendAudio()            (caller audio -> model)
+//   OpenAI delta  ─▶ twilio { event:'media', ... }   (model voice -> call)
+//   barge-in      ─▶ twilio { event:'clear', ... }   (the user interrupts)
+//   function call ─▶ dispatchToolCall(...)           (tools: transfer/contact/end)
+//   transcript    ─▶ turns[]                         (subtitles, in memory only)
+//   on hangup     ─▶ summary (LLM) -> email -> record   (Phase 5)
 //
-// PRIVACIDAD (D11): la transcripción vive únicamente en memoria durante la llamada. Se
-// usa para generar el resumen y se descarta al terminar; nunca se escribe en disco.
+// PRIVACY (D11): the transcript lives only in memory during the call. It is used to
+// generate the summary and discarded when the call ends; it is never written to disk.
 
 import { connectRealtime } from '../realtime/openaiRealtime.js';
 import { buildInstructions } from '../agent/prompt.js';
@@ -33,16 +33,16 @@ const GREETING =
   'how you can help. Keep it to one or two short sentences. If the caller replies in ' +
   'another language, switch to it for the rest of the call.';
 
-// Margen (ms) antes de colgar tras end_call, para que suene la despedida ya emitida.
+// Margin (ms) before hanging up after end_call, so the already-emitted goodbye can play.
 const HANGUP_DELAY_MS = 2000;
 
 export async function handleMediaStream(twilioWs) {
   let streamSid = null;
   let callSid = null;
   let closing = false;
-  let counted = false; // ¿hemos contado esta llamada en el limitador?
+  let counted = false; // have we counted this call in the limiter?
 
-  // Estado para el resumen (Fase 5). `turns` solo existe en memoria: ver nota D11.
+  // State for the summary (Phase 5). `turns` only exists in memory: see note D11.
   let callerNumber = '';
   let startedAt = null;
   let turns = [];
@@ -50,8 +50,8 @@ export async function handleMediaStream(twilioWs) {
 
   const instructions = await buildInstructions();
 
-  // Cierre ordenado de la llamada: cuelga en Twilio (si hay cliente y callSid) y cierra
-  // el WebSocket. Idempotente gracias a `closing`.
+  // Orderly call teardown: hang up on Twilio (if there is a client and callSid) and
+  // close the WebSocket. Idempotent thanks to `closing`.
   function endCall() {
     if (closing) return;
     closing = true;
@@ -59,10 +59,10 @@ export async function handleMediaStream(twilioWs) {
       try {
         if (twilioClient && callSid) {
           await twilioClient.calls(callSid).update({ status: 'completed' });
-          logger.info(`[media] llamada ${callSid} colgada por end_call`);
+          logger.info(`[media] call ${callSid} hung up by end_call`);
         }
       } catch (err) {
-        logger.error('[media] error al colgar la llamada:', err.message);
+        logger.error('[media] error hanging up the call:', err.message);
       } finally {
         try {
           twilioWs.close();
@@ -73,9 +73,9 @@ export async function handleMediaStream(twilioWs) {
     }, HANGUP_DELAY_MS);
   }
 
-  // Cierre de la llamada a efectos de negocio: resumir, avisar por email y registrar.
-  // Se ejecuta una sola vez (`finalized`), sea cual sea la causa del cierre: el agente
-  // se despidió, el llamante colgó, o se agotó MAX_CALL_SECONDS.
+  // Business-level call teardown: summarize, notify by email and record. Runs exactly
+  // once (`finalized`), whatever the cause of the close: the agent said goodbye, the
+  // caller hung up, or MAX_CALL_SECONDS elapsed.
   async function finalizeCall() {
     if (finalized) return;
     finalized = true;
@@ -85,8 +85,8 @@ export async function handleMediaStream(twilioWs) {
       ? Math.round((endedAt.getTime() - startedAt.getTime()) / 1000)
       : null;
 
-    // Nos quedamos con los turnos y vaciamos el estado de inmediato: a partir de aquí la
-    // transcripción solo vive como argumento de reportCall.
+    // Take the turns and clear the state immediately: from here on the transcript only
+    // lives as an argument to reportCall.
     const callTurns = turns;
     turns = [];
 
@@ -100,13 +100,13 @@ export async function handleMediaStream(twilioWs) {
     });
   }
 
-  // Guard de silencio y máximo de turnos del llamante. Cerrar el WebSocket de Twilio
-  // termina la llamada (el <Connect><Stream> se completa) y dispara el resumen.
+  // Silence and max-caller-turns guard. Closing the Twilio WebSocket ends the call (the
+  // <Connect><Stream> completes) and triggers the summary.
   const guard = createCallGuard({
     silenceMs: config.silenceTimeoutSeconds * 1000,
     maxCallerTurns: config.maxCallerTurns,
     onSilence() {
-      logger.warn('[media] silencio prolongado; cerrando la llamada');
+      logger.warn('[media] prolonged silence; closing the call');
       try {
         twilioWs.close();
       } catch {
@@ -114,7 +114,7 @@ export async function handleMediaStream(twilioWs) {
       }
     },
     onMaxTurns() {
-      logger.warn('[media] máximo de turnos alcanzado; cerrando la llamada');
+      logger.warn('[media] max turns reached; closing the call');
       try {
         twilioWs.close();
       } catch {
@@ -129,7 +129,7 @@ export async function handleMediaStream(twilioWs) {
     greeting: GREETING,
     handlers: {
       onAudioDelta(base64) {
-        // Voz del modelo -> Twilio (hacia el llamante).
+        // Model voice -> Twilio (towards the caller).
         guard.activity();
         if (streamSid) {
           twilioWs.send(
@@ -138,23 +138,23 @@ export async function handleMediaStream(twilioWs) {
         }
       },
       onSpeechStarted() {
-        // El usuario interrumpe: vaciamos el audio en cola en Twilio (barge-in).
+        // The user interrupts: flush the audio queued in Twilio (barge-in).
         guard.activity();
         if (streamSid) {
           twilioWs.send(JSON.stringify({ event: 'clear', streamSid }));
         }
       },
       onTranscript(role, text) {
-        // Subtítulo de un turno (llamante o agente). Solo en memoria, y no lo volcamos
-        // en los logs: es contenido personal de terceros.
+        // Subtitle of a turn (caller or agent). In memory only, and we do not dump it
+        // into the logs: it is third-party personal content.
         turns.push({ role, text });
         guard.activity();
         if (role === 'caller') guard.countCallerTurn();
       },
       onClose() {
-        // OpenAI se cayó y se agotaron los reintentos: cerramos la llamada para no
-        // dejar audio muerto. Al cerrarse el WebSocket de Twilio se dispara el resumen.
-        logger.warn('[media] OpenAI no disponible; cerrando la llamada');
+        // OpenAI dropped and retries were exhausted: close the call so we don't leave
+        // dead air. Closing the Twilio WebSocket triggers the summary.
+        logger.warn('[media] OpenAI unavailable; closing the call');
         try {
           twilioWs.close();
         } catch {
@@ -162,13 +162,13 @@ export async function handleMediaStream(twilioWs) {
         }
       },
       async onFunctionCall(event) {
-        // El modelo quiere ejecutar una tool. La ejecutamos y devolvemos el resultado.
+        // The model wants to run a tool. We run it and return the result.
         const ctx = { callSid, streamSid, twilioWs, realtime, endCall };
         try {
           const { output, triggerResponse } = await dispatchToolCall(event, ctx);
           realtime.sendFunctionResult(event.call_id, output, { triggerResponse });
         } catch (err) {
-          logger.error('[media] error ejecutando tool:', err.message);
+          logger.error('[media] error running tool:', err.message);
           realtime.sendFunctionResult(
             event.call_id,
             'The tool failed due to a technical issue.',
@@ -179,9 +179,9 @@ export async function handleMediaStream(twilioWs) {
     },
   });
 
-  // Guardarraíl de coste: cerrar la llamada al superar la duración máxima.
+  // Cost guardrail: close the call when the maximum duration is exceeded.
   const maxTimer = setTimeout(() => {
-    logger.warn(`[media] duración máxima (${config.maxCallSeconds}s) alcanzada, cerrando`);
+    logger.warn(`[media] max duration (${config.maxCallSeconds}s) reached, closing`);
     try {
       twilioWs.close();
     } catch {
@@ -206,14 +206,14 @@ export async function handleMediaStream(twilioWs) {
         registerCallStart();
         counted = true;
         guard.start();
-        logger.info(`[media] stream iniciado (streamSid=${streamSid}, callSid=${callSid})`);
+        logger.info(`[media] stream started (streamSid=${streamSid}, callSid=${callSid})`);
         break;
       case 'media':
-        // Audio del llamante -> modelo.
+        // Caller audio -> model.
         realtime.sendAudio(msg.media.payload);
         break;
       case 'stop':
-        logger.info('[media] stream detenido por Twilio');
+        logger.info('[media] stream stopped by Twilio');
         break;
       default:
         break;
@@ -228,15 +228,15 @@ export async function handleMediaStream(twilioWs) {
       registerCallEnd();
       counted = false;
     }
-    logger.info('[media] conexión Twilio cerrada');
-    // Resumen + email + registro. No esperamos aquí (el callback es síncrono), pero
-    // capturamos cualquier fallo para que no quede una promesa sin manejar.
+    logger.info('[media] Twilio connection closed');
+    // Summary + email + record. We don't await here (the callback is synchronous), but
+    // we catch any failure so no promise is left unhandled.
     finalizeCall().catch((err) =>
-      logger.error('[media] error en el cierre de la llamada:', err.message)
+      logger.error('[media] error during call teardown:', err.message)
     );
   });
 
   twilioWs.on('error', (err) => {
-    logger.error('[media] error websocket Twilio:', err.message);
+    logger.error('[media] Twilio websocket error:', err.message);
   });
 }

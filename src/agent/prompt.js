@@ -1,9 +1,8 @@
-// Construye el system prompt (instrucciones) del agente inyectando el CV.
+// Builds the agent's system prompt (instructions) by injecting the CV.
 //
-// Fase 3: personalidad, idioma, tono y reglas de conducta.
-// Las tools (transferir, guardar contacto, finalizar) se cablean en la Fase 4;
-// aquí el prompt ya describe CUÁNDO conviene usarlas para que la conducta sea
-// coherente en cuanto existan.
+// Phase 3: personality, language, tone and behaviour rules.
+// The tools (transfer, save contact, end call) are wired in Phase 4; here the prompt
+// already describes WHEN to use them so behaviour is coherent once they exist.
 
 import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';

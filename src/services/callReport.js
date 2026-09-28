@@ -1,11 +1,14 @@
-// Cierre de una llamada: resumir, enviar el email y dejar constancia.
+// Call teardown: summarize, send the email and record it.
 //
-// Está separado del puente de audio (`mediaStream.js`) para poder probarlo sin necesidad
-// de una llamada real: las tres dependencias externas (resumen, email y persistencia) se
-// pueden inyectar en los tests.
+// It is separate from the audio bridge (`mediaStream.js`) so it can be tested without a
+// real call: the three external dependencies (summary, email and persistence) can be
+// injected in tests.
 //
-// PRIVACIDAD (D11): la transcripción entra por parámetro, se usa para generar el resumen
-// y no sale de aquí. El registro que se persiste contiene SOLO el resumen.
+// PRIVACY (D11): the transcript comes in as a parameter, is used to generate the summary
+// and does not leave here. The persisted record contains ONLY the summary.
+//
+// NOTE (language): the email subject/body are in Spanish on purpose (recipient is the CV
+// owner); see summary.js. These strings define that email's content.
 
 import { generateSummary as defaultGenerateSummary, formatTranscript } from './summary.js';
 import { sendSummaryEmail as defaultSendSummaryEmail } from './email.js';
@@ -15,7 +18,7 @@ import { logger } from '../utils/logger.js';
 const DEFAULT_SUBJECT = 'Llamada al agente de CV';
 
 /**
- * Construye la cabecera de datos que precede al resumen en el email.
+ * Builds the data header that precedes the summary in the email.
  */
 function buildHeader({ from, startedAt, durationSeconds }) {
   return [
@@ -28,16 +31,16 @@ function buildHeader({ from, startedAt, durationSeconds }) {
 }
 
 /**
- * Resume la llamada, envía el email y guarda el registro.
+ * Summarizes the call, sends the email and saves the record.
  *
  * @param {object} call
- * @param {Array<{role:string, text:string}>} call.turns - Turnos de la conversación.
+ * @param {Array<{role:string, text:string}>} call.turns - Conversation turns.
  * @param {string} [call.callSid]
  * @param {string} [call.from]
  * @param {string} [call.startedAt] - ISO 8601.
  * @param {string} [call.endedAt] - ISO 8601.
  * @param {number|null} [call.durationSeconds]
- * @param {object} [deps] - Inyección de dependencias (tests).
+ * @param {object} [deps] - Dependency injection (tests).
  * @returns {Promise<{summary:string|null, emailSent:boolean, record:object}>}
  */
 export async function reportCall(call, deps = {}) {
@@ -65,10 +68,10 @@ export async function reportCall(call, deps = {}) {
     turnCount: turns.length,
   };
 
-  // Sin conversación (escaneo, silencio, cuelgue inmediato): no mandamos email para no
-  // llenar la bandeja, pero dejamos constancia de que hubo una llamada.
+  // No conversation (scan, silence, immediate hangup): we don't send an email so we
+  // don't clutter the inbox, but we still record that a call happened.
   if (turns.length === 0) {
-    logger.info('[report] llamada sin turnos, no se genera resumen');
+    logger.info('[report] call with no turns, no summary generated');
     const record = { ...baseRecord, summary: null, emailSent: false };
     await persist(saveCallRecord, record);
     return { summary: null, emailSent: false, record };
@@ -84,9 +87,9 @@ export async function reportCall(call, deps = {}) {
     body = result.body;
     summary = result.body;
   } catch (err) {
-    // Si el resumen falla no queremos perder la llamada: enviamos la transcripción en
-    // bruto por email (que no se almacena). En disco el resumen queda a null.
-    logger.error('[report] fallo al generar el resumen:', err.message);
+    // If the summary fails we don't want to lose the call: we send the raw transcript by
+    // email (which is not stored). On disk the summary stays null.
+    logger.error('[report] failed to generate the summary:', err.message);
     subject = `${DEFAULT_SUBJECT} (resumen no disponible)`;
     body =
       'No se pudo generar el resumen automático de la llamada.\n' +
@@ -106,11 +109,11 @@ export async function reportCall(call, deps = {}) {
   return { summary, emailSent, record };
 }
 
-// Guardar el registro nunca debe tumbar el cierre de la llamada.
+// Saving the record must never bring down the call teardown.
 async function persist(saveCallRecord, record) {
   try {
     await saveCallRecord(record);
   } catch (err) {
-    logger.error('[report] no se pudo registrar la llamada:', err.message);
+    logger.error('[report] could not record the call:', err.message);
   }
 }

@@ -1,0 +1,207 @@
+# Project log — Agent CV
+
+> Living document. Records the **plan**, the **decisions** (with their rationale) and
+> **which phase we are in**. Goal: if the conversation is lost, everything is clear here
+> to pick the work back up.
+
+Last updated: 2026-09-28
+
+---
+
+## 1. Project goal
+
+An AI voice agent that answers a phone number with the information from my CV. Companies
+in the tech sector can call, ask questions about me or about the agent itself, request the
+call be transferred to my mobile, or leave their contact details. After each call, I
+receive an email with a summary of what was discussed.
+
+---
+
+## 2. Decisions made (with rationale)
+
+| # | Decision | Rationale | Date |
+|---|----------|-----------|------|
+| D1 | **Path B (DIY)**: Twilio + OpenAI Realtime + Node.js backend, instead of a managed platform (Vapi/Retell). | More control, cheaper per minute, and it shows real technical muscle for the portfolio. | 2026-08-11 |
+| D2 | **Develop locally first**, deploy to the cloud at the end. | Iterate for free and fast; debugging is easier locally. In production it will go to the cloud. | 2026-08-11 |
+| D3 | **Node.js stack** (ESM), server + WebSocket. | Idiomatic for Twilio Media Streams and OpenAI Realtime; plenty of examples available. | 2026-08-11 |
+| D4 | **Isolation with a Node version manager (fnm)** instead of Docker. | Dependencies are already isolated per project via `node_modules`; fnm keeps Node per-user without touching the system. Docker added friction with audio/network without paying off in development. | 2026-08-11 |
+| D5 | Install fnm via **direct binary** in `~/.local/bin` instead of via Homebrew. | The official fnm script on macOS requires Homebrew (not installed). Downloading the binary avoids installing Homebrew (more intrusive) and is just as clean/reversible. | 2026-08-11 |
+| D6 | **Node LTS v24.19.0**, pinned with `.nvmrc`. | Stable LTS version; `.nvmrc` + fnm `--use-on-cd` activate the right version when entering the folder, reproducible on any machine. | 2026-08-11 |
+| D7 | **Develop with a US number**; the Spanish number will be **geographic/Local**, not mobile. | The Spanish bundle created was of type **Mobile**, but Twilio has no +34 mobile inventory and Spanish law (2025) forbids using mobiles for customer-service/business calls. A **Local (geographic)** bundle with an address in the prefix's area is required. While it is approved, development continues with the already-bought US number. Luxembourg discarded: for a caller from Spain it is an international call (roaming ≠ calling a foreign number), not equivalent to a national one. | 2026-08-12 |
+| D8 | **Twilio does NOT have Spanish number inventory** (checked via API: `ES/Local` returns 404, while `US/Local` does list numbers). The Local bundle is approved, but there is no stock to buy. | Verified with valid credentials (HTTP 200 on the account). Not a configuration or bundle problem. Options: (a) open a Twilio support ticket asking for a geographic ES number; (b) get the Spanish number from another provider with inventory (Telnyx/Vonage/Plivo) at deployment; (c) keep developing with the US number. The architecture (Media Streams) is portable to another provider if needed. | 2026-08-13 |
+| D9 | **Chose Option 3**: develop with the US number; later, possibly create an account with another provider to get the Spanish number. | Don't get blocked by inventory. The bulk of the work (Phases 1-6) is independent of the number's country. The Spanish number will be resolved at deployment (Phase 7). | 2026-08-13 |
+| D10 | **Agent language: English by default, with automatic adaptation to the caller's language.** The CV is kept in its original English as the source of truth. | OpenAI Realtime's speech-to-speech model is natively multilingual: adapting the language is just an instruction in the system prompt (a few dozen text tokens, once per session), **with no per-turn latency or appreciable cost** and no extra components. It fits a bilingual profile (English C1, Luxembourg) and both national and international calls. | 2026-08-23 |
+| D11 | **Only the call summary is stored, never the transcript.** The transcript lives in memory during the call, is used to generate the summary and is discarded on hangup. | The transcript is third-party personal information (the caller) and accumulating it on disk adds risk without adding value: the summary already contains the actionable part. The summary is persisted in `data/calls.jsonl` and sent by email. **Only exception:** if summary generation fails, the notification email includes the raw transcript so the call isn't lost — but on disk the summary stays `null` and the transcript is not written. | 2026-09-23 |
+| D12 | **The server listens only on `127.0.0.1` by default** (`HOST` variable), and the local port moves to **3001**. | Developed on a corporate machine: listening on `0.0.0.0` left the server reachable from the office network for no reason. With `127.0.0.1` it is only reachable from the machine itself; at deployment (Phase 7) `HOST=0.0.0.0` will be set, where it is actually needed. Port 3000 was taken by Visual Studio Code, which made local tests talk to the wrong program. | 2026-09-23 |
+| D13 | **Stay on Twilio and use a geographic LOCAL number from Luxembourg (+352)**, instead of the Spanish +34 via Telnyx. | Telnyx requires reaching **Verified** level + DNI/NIE + a Spanish address + **being physically in Spain** to buy, and would also force **migrating the code from Twilio to Telnyx**. Verified via API that **Twilio DOES have LU/Local inventory with voice** (`LU/Local`=200; `LU/Mobile` and `LU/National`=404; Spain still 404 for everything). The LU number's **local address** requirement is met with the **user's real address in Luxembourg**. Advantages: unblocks the purchase **now**, **zero migration** (the project is already Twilio), and for the user's tests (Spanish SIM roaming in LU) calling the +352 costs a **national rate** (RLAH). **Accepted downside:** for a caller from Spain it is an **intra-EU call** (capped by the EU at ~€0.19/min, not national). The Spanish +34 remains a possible future improvement if the target audience justifies it. | 2026-09-28 |
+| D14 | **Deployment platform: Render + GitHub**, `starter` plan (always awake). | Render deploys Node natively (no Docker), supports **WebSockets** (needed by `/media-stream`), gives automatic **HTTPS/WSS**, uses `/health` as health check and **redeploys on every push**. The **`free` plan sleeps after 15 min** and takes ~1 min to wake, which would **fail incoming calls**; hence **`starter`** (~$7/month) for the always-on instance. Fly.io alternative (from CLI, no GitHub, but with Docker) discarded due to more friction. Secrets go in the Render dashboard (`sync:false`), never in the repo. | 2026-09-28 |
+
+---
+
+## 3. Phase plan
+
+- **Phase 0 — Environment setup**
+- **Phase 1 — Base server that answers calls**
+- **Phase 2 — Real-time audio bridge with the AI**
+- **Phase 3 — Personality and knowledge (the CV)**
+- **Phase 4 — Actions (tools: transfer, save contact, end)**
+- **Phase 5 — Post-call email summary**
+- **Phase 6 — Robustness and guardrails** ✅ completed
+- **Phase 7 — Cloud deployment** ← *we are here*
+
+### Detail of each phase
+
+**Phase 0 — Environment setup**
+1. Install a Node version manager (fnm) per-user.
+2. Install Node.js LTS with fnm and pin the project version (`.nvmrc`).
+3. Verify `node` and `npm`.
+4. Create a Twilio account + buy a number.
+5. Create an OpenAI API key (with Realtime access).
+6. Choose an email provider (Resend) + API key.
+7. Prepare ngrok (tunnel) for testing.
+8. Fill in `.env` from `.env.example`.
+
+**Phase 1 — Base server**
+1. `npm install` of base dependencies.
+2. HTTP server in `src/index.js`.
+3. Incoming-call webhook (`twilioWebhook.js`) with simple TwiML.
+4. ngrok + configure the webhook in Twilio.
+5. Test: call and hear a message.
+
+**Phase 2 — Real-time audio bridge**
+1. TwiML with `<Connect><Stream>`.
+2. Media Streams WebSocket (`mediaStream.js`).
+3. Connection to OpenAI Realtime (`openaiRealtime.js`).
+4. Bidirectional audio bridge (mulaw 8kHz).
+5. Test: basic conversation with the AI.
+
+**Phase 3 — Personality and CV**
+1. Paste the CV into `data/cv/cv.md`.
+2. `prompt.js`: system prompt with the CV and rules.
+3. Tune voice and language.
+4. Test: questions about the profile.
+
+**Phase 4 — Actions (tools)**
+1. `transferCall.js` (transfer to mobile).
+2. `saveContact.js` (save contact → `storage.js`).
+3. `endCall.js` (wrap up and hang up).
+4. Register tools in the Realtime session.
+5. Test: transfer and contact capture.
+
+**Phase 5 — Email summary**
+1. Capture the transcript (in memory only; see D11).
+2. `summary.js` (summary with LLM).
+3. `email.js` (send the summary).
+4. `callReport.js` (orchestrates summary + email + record) and trigger on call end.
+5. Test: receive the email → **done (2026-09-27)**: Resend account created and real send verified end-to-end.
+
+**Phase 6 — Robustness and guardrails**
+
+Guardrails already present (not waiting for Phase 6):
+- **Behavioural (prompt, Phase 3):** anti-fabrication (CV data only), honesty about the unknown + offer to take contact, refusal to badmouth anyone or reveal confidential employer data, language control.
+- **Cost (Phase 2):** call duration limit (`MAX_CALL_SECONDS`).
+- **Network (D12, brought forward):** the server listens only on `127.0.0.1` unless `HOST` is set.
+- **Privacy (D11, Phase 5):** the transcript is not persisted; turns are not dumped into the logs.
+
+Items in this phase (recommended priority top to bottom):
+1. ✅ **DONE (2026-09-28)** — **Validate the Twilio signature** (`X-Twilio-Signature`) on `/incoming-call`: rejects with 403 if not signed. Module `src/security/twilioSignature.js`. *(security, high priority)*
+2. ✅ **DONE (2026-09-28)** — **Authenticate the `/media-stream` WebSocket**: HMAC-SHA256 token with expiry embedded in the `<Stream>` URL, verified when the connection opens before connecting to OpenAI. Module `src/security/streamToken.js`. *(security, high priority)*
+3. ✅ **DONE (2026-09-28)** — **Spend / concurrency limit**: cap on simultaneous calls (`MAX_CONCURRENT_CALLS`) and per day (`MAX_CALLS_PER_DAY`, UTC reset). Checked in the webhook before accepting; rejection with a spoken message + hangup. Module `src/telephony/callLimiter.js`.
+4. ✅ **DONE (2026-09-28)** — **Error handling and reconnection** of the OpenAI WebSocket mid-call: if it drops unexpectedly, retry with bounded exponential backoff (`OPENAI_RECONNECT_MAX_ATTEMPTS`, pure policy in `src/realtime/reconnectPolicy.js`); on reconnect it reconfigures the session without replaying the greeting; if retries are exhausted, it closes the call (via `onClose`) so no dead air is left.
+5. ✅ **DONE (2026-09-28)** — **Silence timeout / max turns**: `src/telephony/callGuard.js` (injectable timers). Closes the call on total silence for `SILENCE_TIMEOUT_SECONDS` (reset by caller speech, agent voice and transcripts) or if the caller exceeds `MAX_CALLER_TURNS`.
+6. ✅ **DONE (2026-09-28)** — **Prompt-injection resistance**: "Security and boundaries" section in `src/agent/prompt.js` — the caller is not an operator, attempts to change the role/rules ("ignore previous instructions", jailbreak modes) are ignored, the prompt is not revealed or translated, no secrets are leaked, and what the caller says is content, not commands. Covered by `buildInstructions` tests.
+7. ✅ **DONE (2026-09-28)** — **PII in logs**: audited all `logger.*`. The transcript and the caller's number are never logged; the rest are internal identifiers (callSid/streamSid) or status. The one leak fixed: `storage.js` no longer logs the contact's **name** (now only `callSid`).
+8. ✅ **DONE (2026-09-28)** — **Structured logs and basic tests**: logger with timestamp + level, `text` (dev) or `json` (`LOG_FORMAT=json`, production) format. Pure, testable formatting in `src/utils/logFormat.js`. **61 unit tests** in total.
+
+**Phase 7 — Cloud deployment**
+1. **Platform chosen: Render + GitHub** (D14). Native Node (no Docker), automatic WebSockets and HTTPS/WSS, `/health` health check, redeploy on every push. **`starter`** plan (~$7/month, always awake): `free` sleeps after 15 min and an incoming call would fail due to the cold start.
+2. **Repo preparation (done, 2026-09-28):** `engines.node` in `package.json`, `render.yaml` (Blueprint with the service, health check, `sync:false` secrets and auto-generated `STREAM_TOKEN_SECRET`), `publicUrl` fallback to `RENDER_EXTERNAL_URL`, and a step-by-step guide in `docs/DEPLOYMENT.md`.
+3. **Pending execution:** push to GitHub, create the service on Render, fill in secret variables in its dashboard.
+4. Point the Twilio webhook at the final URL (`https://…onrender.com/incoming-call`, POST).
+5. End-to-end production test (requires the approved LU number).
+
+---
+
+## 4. Current status
+
+- **Current phase:** **Phase 6 completed** (robustness and guardrails). Next: Phase 7 (deployment). Phase 5 verified (real email included).
+- **Done:**
+  - Local environment (fnm + Node v24.19.0).
+  - Twilio (US number) and OpenAI verified; `.env` with credentials.
+  - **Phase 1 (code):** Fastify server with `/health` and `/incoming-call`. Verified locally.
+  - **Phase 2 (code):** real-time audio bridge Twilio Media Streams ↔ OpenAI Realtime (GA API).
+    - `src/realtime/openaiRealtime.js`: GA connection (`wss://api.openai.com/v1/realtime`, Bearer, no beta header), `session.update` with `audio/pcmu` audio (= Twilio's μ-law, no re-encoding) + `server_vad`, initial greeting, `response.output_audio.delta` and `input_audio_buffer.speech_started` events.
+    - `src/telephony/mediaStream.js`: bidirectional bridge + barge-in (`clear` event) + `MAX_CALL_SECONDS` limit.
+    - `src/telephony/twilioWebhook.js`: TwiML `<Connect><Stream>`.
+    - Dependencies added: `ws`.
+    - **Verified without a real call:** `node --check` OK on 6 files; server boots; `/health` OK; webhook returns TwiML `<Connect><Stream>`; `/media-stream` responds **101 Switching Protocols** to the WebSocket handshake.
+  - **Phase 3 (code + content):** personality, language and real CV.
+    - `data/cv/cv.md`: real CV of Álvaro Nieto Balmori integrated (English, source of truth).
+    - `src/agent/prompt.js`: enriched system prompt — language **English by default with caller adaptation** (D10), conversational/phone tone, anti-fabrication rules, and a description of behaviours (when to transfer, when to ask for contact, how to wrap up) to give coherence before wiring the tools in Phase 4.
+    - `src/telephony/mediaStream.js`: initial greeting (`GREETING`) moved to English by default.
+    - **Verified:** `node --check` OK; `buildInstructions()` loads the CV (contains "DRAM" and "Álvaro Nieto Balmori") and applies the language rule; resulting prompt ~6.3 KB.
+  - **Phase 4 (code):** agent tools wired into the Realtime session.
+    - `src/agent/tools/transferCall.js` (`transfer_call`): redirects the live call to the mobile via Twilio REST (`calls(callSid).update({ twiml: <Dial> })`).
+    - `src/agent/tools/saveContact.js` (`save_contact`): saves name/company/phone/email/reason via `storage.js`.
+    - `src/agent/tools/endCall.js` (`end_call`): orderly teardown (`triggerResponse:false`, no more speech); delegates to the bridge.
+    - `src/agent/tools/index.js`: registry (`toolDefinitions`) + `dispatchToolCall(event, ctx)`.
+    - `src/services/storage.js`: JSONL persistence (`data/contacts.jsonl`, `data/calls.jsonl`).
+    - `src/telephony/twilioClient.js`: shared Twilio REST client (null if credentials are missing).
+    - `src/telephony/mediaStream.js`: captures `callSid`, passes `toolDefinitions`, `onFunctionCall`→dispatch, and `endCall()` which hangs up on Twilio (`status:'completed'`) after a 2s margin.
+    - `src/realtime/openaiRealtime.js`: `sendFunctionResult(callId, output, {triggerResponse})`.
+    - `.gitignore`: added `data/contacts.jsonl` and `data/calls.jsonl` (PII).
+    - **Verified without a real call:** `node --check` OK on 8 files; dispatcher test (the 3 tools + an unknown tool) OK; `save_contact` persists correctly; `end_call` triggers teardown with `triggerResponse:false`; `transfer_call` without `callSid` degrades with a message; server boots and `/health` + `/incoming-call` respond.
+  - **Phase 5 (code):** post-call email summary on hangup.
+    - `src/realtime/openaiRealtime.js`: transcription enabled (`audio.input.transcription`, model `OPENAI_TRANSCRIBE_MODEL`) and new `onTranscript(role, text)` handler. Both agent-side event names are accepted (`response.output_audio_transcript.done` from GA and `response.audio_transcript.done` from beta).
+    - `src/services/summary.js`: `generateSummary(turns, meta)` against Chat Completions with `fetch` (no SDK), `response_format: json_object`, returns `{subject, body}` in Spanish. `formatTranscript()` labels turns and trims to 20 KB keeping the end.
+    - `src/services/email.js`: `sendSummaryEmail({subject, body})` via the Resend REST API with `fetch`. Never throws: if configuration is missing or sending fails, it warns and returns `false`.
+    - `src/services/callReport.js`: **new**. Orchestrates summary → email → record. The three dependencies are injectable, which is what allows testing the full flow without a real call.
+    - `src/telephony/mediaStream.js`: accumulates turns in memory and `finalizeCall()` (idempotent) delegates to `reportCall()` when the WebSocket closes, whether by the agent saying goodbye, the caller hanging up, or `MAX_CALL_SECONDS`.
+    - `src/telephony/twilioWebhook.js`: the TwiML passes the caller's number to the stream with `<Parameter name="from">` (the Media Streams `start` event does not include it).
+    - `src/config/index.js` + `.env.example`: `OPENAI_TRANSCRIBE_MODEL` (default `whisper-1`), `OPENAI_SUMMARY_MODEL` (default `gpt-4o-mini`) and `HOST` (see D12).
+    - No new dependencies: both OpenAI and Resend are called with native `fetch`.
+    - Behaviour with no conversation (scan, silence, immediate hangup): the call is recorded but **no** email is sent, to avoid cluttering the inbox.
+    - **Verified without a real call:** `node --check` OK on 19 files; **19 unit tests passing** (`npm test`) in `tests/summary.test.js`, `tests/email.test.js` and `tests/callReport.test.js`, with `fetch` replaced by doubles (zero requests to OpenAI and Resend); one test explicitly checks the persisted record does **not** contain the transcript (D11). Server boots on `127.0.0.1:3001`, `/health` responds and `/incoming-call` returns the TwiML with `<Parameter name="from" value="+15550001111"/>`; verified via `lsof` that it only listens on loopback and with no outbound connections.
+- **Important:** the **real phone-call test is pending deployment** (no tunnel on this work machine; see D9/limitations). It will be validated end-to-end in Phase 7.
+- **Pending:** Phase 7 (deployment). **Phase 6 completed** (8/8 guardrails). **Phase 7 in preparation:** repo ready for Render (see below); still to do: push to GitHub, create the service, LU number approval and the real test.
+- **Email (Resend) — done and verified (2026-09-27):** Resend account created; `EMAIL_API_KEY`,
+  `EMAIL_FROM=onboarding@resend.dev` (test sender, no own domain) and
+  `EMAIL_TO=alvaronieto97@gmail.com` set in `.env`. **Real** send tested end-to-end with the
+  project's own `sendSummaryEmail()`: Resend returned OK and the email arrived. Free-plan note:
+  with the `onboarding@resend.dev` sender you can only send to the address the account was
+  registered with; for other recipients you would need to verify your own domain.
+- **Configuration note:** variables already present in the environment **take precedence** over `.env` (behaviour of `process.loadEnvFile`, same as `--env-file`). If `PORT` is exported in the shell, the `.env` value is ignored.
+
+### How to start the server locally
+```
+cd "$HOME/Documents/personal/Agent CV"
+npm run dev      # (fnm activates Node v24.19.0 automatically via .nvmrc)
+npm test         # unit tests (make no network requests)
+```
+Listens on `http://127.0.0.1:3001` (see D12). If the shell has `PORT` exported, that wins
+over `.env`: start then with `PORT=3001 npm run dev`.
+
+### Progress log
+| Date | What was done |
+|------|---------------|
+| 2026-08-11 | Project structure and log created. Stack and isolation method decided. Phase 0 started. |
+| 2026-08-11 | Installed fnm (binary) + Node LTS v24.19.0; configured `~/.zshrc` and `.nvmrc`. Local dev environment ready. External accounts/keys still missing. |
+| 2026-08-12 | Twilio account + US number bought. Detected that the Spanish "Mobile" bundle does not allow buying a number (no inventory + legal ban for customer-service/business). Decision D7: use the US number in development and process a **Local/geographic** bundle for the +34. Created `.env` from the template. |
+| 2026-08-13 | Twilio credentials set in `.env` and **verified** (HTTP 200). Verified via API that **Twilio has no ES number inventory** (`ES/Local`=404, `US/Local`=5 available). Local bundle approved but no stock. See D8. Chose **Option 3** (D9): develop with the US number. Twilio number verified as owned and voice-capable; `MY_PERSONAL_NUMBER` added. **Twilio part of Phase 0 closed.** Next: OpenAI API key. |
+| 2026-08-13 | Confirmed use of **OpenAI Realtime** (voice included; ElevenLabs would be an alternative, not a complement). OpenAI API key created, set in `.env` and **verified** (HTTP 200, Realtime access, `gpt-realtime-mini` available). Only Resend (Phase 5) and ngrok (when testing Phase 1) remain. **Ready to start coding Phase 1.** |
+| 2026-08-13 | **Phase 1 (code) done and verified locally.** Installed base dependencies (pinned versions). Implemented `src/config/index.js`, `src/index.js` (Fastify: `/health` + `/incoming-call`) and `src/telephony/twilioWebhook.js` (es-ES greeting TwiML). Local tests OK. |
+| 2026-08-13 | Attempt to install **ngrok** blocked by the Amazon network (work machine). Decided **not to use a tunnel** on this machine for corporate security. Plan: keep coding (Phases 2-5) without local testing and **deploy to the cloud** for testing (no tunnel). App Runner discarded (AWS retires it for new customers from 2026-04-30); options: Render via GitHub (recommended) or AWS Fargate+ALB. |
+| 2026-08-13 | **Phase 2 (code) done and verified without a real call.** Twilio Media Streams ↔ OpenAI Realtime bridge (GA). `node --check` OK; boot OK; webhook returns `<Connect><Stream>`; `/media-stream` → 101 Switching Protocols. Real test deferred to deployment. |
+| 2026-08-23 | **Phase 3 (code + content) done and verified.** Integrated the real CV (Álvaro Nieto Balmori, Revolut version) into `data/cv/cv.md` in English as the source of truth. Enriched `src/agent/prompt.js`: English by default with caller adaptation (D10), phone tone, anti-fabrication rules and behaviour descriptions for Phase 4. `GREETING` moved to English. Verified: `node --check` OK and `buildInstructions()` loads the CV + language rule. Next: **Phase 4 (tools)**. |
+| 2026-08-23 | **Phase 4 (code) done and verified without a real call.** Implemented the 3 tools (`transfer_call` via Twilio REST, `save_contact` via JSONL storage, `end_call` with orderly teardown), registry/dispatcher (`tools/index.js`), Twilio REST client and persistence. Wired into the bridge (`callSid`, `onFunctionCall`→dispatch, `endCall` hangs up on Twilio) and `sendFunctionResult` with `triggerResponse`. Verified: `node --check` (8 files), dispatcher test OK, boot + `/health` + `/incoming-call` OK. Also: Phase 6 guardrails detailed in the plan; `.gitignore` protects PII. Next: **Phase 5 (email summary)** — requires a Resend account. |
+| 2026-09-23 | **Phase 5 (code) done and verified without a real call.** Transcription enabled in the Realtime session (in memory only), `generateSummary()` against Chat Completions, `sendSummaryEmail()` against Resend, and new `callReport.js` to orchestrate summary → email → record with injectable dependencies. Automatic trigger when the WebSocket closes, whatever the cause. Decided **D11**: only the summary is stored, the transcript is discarded. No new dependencies (all with native `fetch`). Verified: 19 tests passing without touching the network, including one that checks the on-disk record does not contain the transcript; boot + `/health` + TwiML with `<Parameter name="from">` OK. |
+| 2026-09-23 | **Incident and environment fixes.** A WebSocket test hung and left an orphan Node process listening on port 3000; verified in the log and with `lsof` that it **never connected to OpenAI** (zero outbound connections, no tokens spent) and cleaned up the process. Real cause of the hang: **Visual Studio Code was already using port 3000**, so the test was talking to VS Code instead of our server. Fixed with **D12**: local port to 3001 and listening limited to `127.0.0.1` via a new `HOST` variable. Also corrected the startup path of this log (`Documents/personal`, not `Desktop`). Next: **Phase 6 (robustness and guardrails)**, starting with Twilio signature validation. |
+| 2026-09-27 | **Email (Resend) configured and verified.** Created the Resend account; `EMAIL_API_KEY`, `EMAIL_FROM=onboarding@resend.dev` and `EMAIL_TO=alvaronieto97@gmail.com` filled in `.env` (protected by `.gitignore`). Sent a **real** test email with the project's own `sendSummaryEmail()`: Resend returned OK and the email arrived in the inbox. With this the email is validated end-to-end, no longer dependent on deployment. **Only pending before production: Phases 6 and 7.** |
+| 2026-09-28 | **Decided D13: Luxembourg number on Twilio.** Re-evaluated the number option: Telnyx requires Verified level + being in Spain + docs for the +34, whereas Twilio **does** have LU/Local inventory with voice (checked via API). The local address requirement is met with the user's real address in Luxembourg; purchase of the LU number started on Twilio (regulatory bundle: Spanish identity + LU proof of address) and **awaiting approval**. Advantage: zero code migration. Verified the number is 100% config-controlled: on approval, **only `TWILIO_PHONE_NUMBER` in `.env` changes**; wiring the webhook is left for Phase 7 (needs `PUBLIC_URL`). **Started Phase 6** (robustness/guardrails) focused on Twilio, beginning with Twilio signature validation. |
+| 2026-09-28 | **Phase 6, items 1-3 done, verified and committed.** (1) `X-Twilio-Signature` validation on `/incoming-call` (`src/security/twilioSignature.js`, 403 rejection). (2) `/media-stream` WebSocket auth with an expiring HMAC-SHA256 token in the `<Stream>` URL, verified before connecting to OpenAI (`src/security/streamToken.js`). (3) Concurrency and daily cap (`src/telephony/callLimiter.js`, vars `MAX_CONCURRENT_CALLS`/`MAX_CALLS_PER_DAY`; rejection with spoken message + hangup in the webhook). New `security` and `limits` config + `numEnv` helper (respects 0). **41 unit tests green, no network or WebSocket** (corporate machine restriction). **Initialized the local Git repository** (did not exist): first commit `8186e01` on branch `main`, `.env` excluded. Pending in Phase 6: items 4-8 (OpenAI reconnection, silence timeout, prompt-injection, PII in logs, structured logs). |
+| 2026-09-28 | **Phase 6, item 4 done, verified and committed.** OpenAI WebSocket reconnection mid-call: pure bounded exponential-backoff policy (`src/realtime/reconnectPolicy.js`, var `OPENAI_RECONNECT_MAX_ATTEMPTS`), refactor of `openaiRealtime.js` (connect/reconnect, no greeting replay on reconnect, resets counter on `session.created`, distinguishes intentional close), and `onClose` wired in the bridge to close the call if retries are exhausted (avoids dead air). **45 tests green, no network or WebSocket.** Pending in Phase 6: items 5-8. |
+| 2026-09-28 | **Phase 6, item 5 done, verified and committed.** Silence timeout and max turns: `src/telephony/callGuard.js` with injectable timers (testable without WebSocket). Closes the call on total silence for `SILENCE_TIMEOUT_SECONDS` (reset by caller speech, agent audio and transcripts) or if the caller exceeds `MAX_CALLER_TURNS`. Wired into `mediaStream.js` (start/activity/countCallerTurn/stop). **52 tests green, no network or WebSocket.** Pending in Phase 6: items 6-8 (prompt-injection, PII in logs, structured logs). |
+| 2026-09-28 | **Phase 6, item 6 done, verified and committed.** Prompt-injection resistance: new "Security and boundaries" section in `src/agent/prompt.js` (the caller is not an operator; role/rule override and jailbreak attempts are ignored; the prompt is not revealed/translated; no secrets/tokens/numbers are leaked; what the caller says is content, not commands). Added `tests/prompt.test.js` checking the presence of those rules, the language/anti-fabrication policy and CV inclusion. **55 tests green, no network or WebSocket.** Pending in Phase 6: items 7-8 (PII in logs, structured logs). |
+| 2026-09-28 | **Phase 6, item 7 done, verified and committed.** Audited all `logger.*` in the code for PII. The transcript and the caller's number are not logged; the rest are internal identifiers (callSid/streamSid) or status. The one leak fixed: `storage.js` was leaving the contact's **name** in the log when saving; now it only records the `callSid`. **55 tests green, no network or WebSocket.** Pending in Phase 6: item 8 (structured logs). |
+| 2026-09-28 | **Phase 6 COMPLETED (item 8 done, verified and committed).** Structured logs: logger with timestamp + level and `text` (dev) or `json` (`LOG_FORMAT=json`, production) format; pure, testable formatting in `src/utils/logFormat.js`. Verified the real logger in both formats (output only, no network). **61 tests green, no network or WebSocket.** This closes the 8 items of Phase 6. **Next: Phase 7 (cloud deployment)** — choose platform (Render via GitHub recommended), configure variables (incl. `HOST=0.0.0.0`, `PUBLIC_URL`, `STREAM_TOKEN_SECRET`, and `TWILIO_PHONE_NUMBER` with the LU number once approved), point the Twilio webhook and first real phone-call test. |
+| 2026-09-28 | **Phase 7 — repo preparation (D14: Render + GitHub).** Added `engines.node` (`>=20.6.0`) in `package.json`; created `render.yaml` (Blueprint: Node web service, `starter` plan, Frankfurt region, `/health` health check, `LOG_FORMAT=json`, secrets with `sync:false`, auto-generated `STREAM_TOKEN_SECRET`); `publicUrl` now falls back to `RENDER_EXTERNAL_URL` if there is no `PUBLIC_URL` (avoids setting it by hand and keeps the Twilio signature consistent); and a step-by-step guide in `docs/DEPLOYMENT.md` (GitHub → Render → variables → Twilio webhook → test). **61 tests green.** Pending execution: push to GitHub, create the service on Render, fill in secrets, LU number approval and the real test. |

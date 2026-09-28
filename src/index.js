@@ -1,9 +1,9 @@
-// Punto de entrada: servidor HTTP + WebSocket con Fastify.
+// Entry point: HTTP + WebSocket server with Fastify.
 //
-// Rutas:
-//  - GET  /health          -> comprobación de estado.
-//  - POST|GET /incoming-call -> webhook de Twilio (devuelve TwiML <Connect><Stream>).
-//  - WS   /media-stream     -> audio en tiempo real (Twilio Media Streams <-> OpenAI).
+// Routes:
+//  - GET  /health           -> health check.
+//  - POST|GET /incoming-call -> Twilio webhook (returns TwiML <Connect><Stream>).
+//  - WS   /media-stream      -> real-time audio (Twilio Media Streams <-> OpenAI).
 
 import Fastify from 'fastify';
 import formbody from '@fastify/formbody';
@@ -17,25 +17,25 @@ import { verifyStreamToken } from './security/streamToken.js';
 
 const app = Fastify({ logger: false });
 
-// Plugins: parseo de formularios (Twilio) y soporte WebSocket.
+// Plugins: form parsing (Twilio) and WebSocket support.
 await app.register(formbody);
 await app.register(websocket);
 
-// Estado del servicio.
+// Service status.
 app.get('/health', async () => ({ status: 'ok', service: 'agent-cv' }));
 
-// Webhook de llamada entrante (Twilio usa POST; aceptamos GET para pruebas manuales).
+// Incoming-call webhook (Twilio uses POST; we accept GET for manual testing).
 app.post('/incoming-call', handleIncomingCall);
 app.get('/incoming-call', handleIncomingCall);
 
-// Endpoint WebSocket para el audio en tiempo real.
+// WebSocket endpoint for real-time audio.
 app.register(async (fastify) => {
   fastify.get('/media-stream', { websocket: true }, (socket /* WebSocket */, req) => {
-    // Autenticación (Fase 6): solo Twilio conoce el token que incrustamos en el TwiML.
-    // Rechazamos la conexión ANTES de conectar con OpenAI para no gastar tokens.
+    // Authentication (Phase 6): only Twilio knows the token we embed in the TwiML.
+    // We reject the connection BEFORE connecting to OpenAI so we don't burn tokens.
     const result = verifyStreamToken(req.query?.token);
     if (!result.valid) {
-      logger.warn(`[media] conexión WebSocket rechazada (token ${result.reason})`);
+      logger.warn(`[media] WebSocket connection rejected (token ${result.reason})`);
       try {
         socket.close(1008, 'unauthorized');
       } catch {
@@ -49,17 +49,17 @@ app.register(async (fastify) => {
 
 try {
   if (!config.security.validateTwilioSignature) {
-    logger.warn('[seguridad] validación de firma de Twilio DESACTIVADA (solo para pruebas locales)');
+    logger.warn('[security] Twilio signature validation DISABLED (local testing only)');
   }
   if (!config.security.streamTokenSecret) {
-    logger.warn('[seguridad] STREAM_TOKEN_SECRET vacío: /media-stream SIN autenticar (solo dev)');
+    logger.warn('[security] STREAM_TOKEN_SECRET empty: /media-stream NOT authenticated (dev only)');
   }
   await app.listen({ port: config.port, host: config.host });
-  logger.info(`Agent CV escuchando en http://${config.host}:${config.port}`);
-  logger.info('  - Salud:   GET  /health');
+  logger.info(`Agent CV listening on http://${config.host}:${config.port}`);
+  logger.info('  - Health:  GET  /health');
   logger.info('  - Webhook: POST /incoming-call');
   logger.info('  - Audio:   WS   /media-stream');
 } catch (err) {
-  logger.error('No se pudo arrancar el servidor:', err);
+  logger.error('Could not start the server:', err);
   process.exit(1);
 }

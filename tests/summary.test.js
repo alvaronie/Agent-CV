@@ -1,7 +1,10 @@
-// Tests de src/services/summary.js
+// Tests for src/services/summary.js
 //
-// No se llama a OpenAI: sustituimos globalThis.fetch por un doble que devuelve una
-// respuesta con la forma real de Chat Completions.
+// OpenAI is not called: we replace globalThis.fetch with a double that returns a response
+// with the real shape of Chat Completions.
+//
+// NOTE: the summary email is Spanish by design, so the assertions below check Spanish
+// content (labels, JSON keys, default subject). That is expected behavior.
 
 import { test, describe, beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
@@ -31,14 +34,14 @@ function stubFetch(content, { ok = true, status = 200 } = {}) {
 }
 
 describe('formatTranscript', () => {
-  test('etiqueta cada turno y descarta los vacíos', () => {
+  test('labels each turn and drops empty ones', () => {
     const text = formatTranscript([...TURNS, { role: 'caller', text: '' }]);
     assert.equal(text.split('\n').length, 3);
     assert.match(text, /^AGENTE: Hello, this is the voice assistant\./);
     assert.match(text, /LLAMANTE: Hi, I am Marta from Acme\./);
   });
 
-  test('devuelve cadena vacía sin turnos', () => {
+  test('returns an empty string with no turns', () => {
     assert.equal(formatTranscript([]), '');
     assert.equal(formatTranscript(), '');
   });
@@ -54,7 +57,7 @@ describe('generateSummary', () => {
     globalThis.fetch = realFetch;
   });
 
-  test('devuelve asunto y cuerpo a partir del JSON del modelo', async () => {
+  test('returns subject and body from the model JSON', async () => {
     stubFetch(
       JSON.stringify({ asunto: 'Marta (Acme) pide contacto', resumen: 'Quién llamó: Marta.' })
     );
@@ -68,7 +71,7 @@ describe('generateSummary', () => {
     assert.equal(body, 'Quién llamó: Marta.');
   });
 
-  test('envía la transcripción y los metadatos al modelo', async () => {
+  test('sends the transcript and metadata to the model', async () => {
     stubFetch(JSON.stringify({ asunto: 'x', resumen: 'y' }));
     await generateSummary(TURNS, { from: '+15550001111', durationSeconds: 42 });
 
@@ -79,7 +82,7 @@ describe('generateSummary', () => {
     assert.equal(lastRequest.body.response_format.type, 'json_object');
   });
 
-  test('si el modelo no devuelve JSON, usa el texto como cuerpo', async () => {
+  test('if the model does not return JSON, uses the text as the body', async () => {
     stubFetch('Resumen en texto plano.');
     const { subject, body } = await generateSummary(TURNS);
 
@@ -87,11 +90,11 @@ describe('generateSummary', () => {
     assert.equal(body, 'Resumen en texto plano.');
   });
 
-  test('lanza error si no hay turnos', async () => {
-    await assert.rejects(() => generateSummary([]), /no hay transcripción/);
+  test('throws if there are no turns', async () => {
+    await assert.rejects(() => generateSummary([]), /no transcript/);
   });
 
-  test('lanza error si la API responde con fallo', async () => {
+  test('throws if the API responds with a failure', async () => {
     stubFetch('rate limited', { ok: false, status: 429 });
     await assert.rejects(() => generateSummary(TURNS), /429/);
   });

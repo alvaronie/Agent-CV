@@ -1,5 +1,5 @@
-// Tests de src/telephony/callLimiter.js — límites de concurrencia y diario.
-// Cómputo puro en memoria: sin red ni WebSocket.
+// Tests for src/telephony/callLimiter.js — concurrency and daily limits.
+// Pure in-memory computation: no network or WebSocket.
 
 import { test, describe, beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
@@ -28,17 +28,17 @@ describe('callLimiter', () => {
     _reset();
   });
 
-  test('acepta llamadas por debajo de los límites', () => {
+  test('accepts calls below the limits', () => {
     assert.deepEqual(canAcceptCall(), { ok: true });
   });
 
-  test('bloquea al alcanzar la concurrencia máxima', () => {
+  test('blocks when the concurrency maximum is reached', () => {
     registerCallStart();
     registerCallStart();
     assert.deepEqual(canAcceptCall(), { ok: false, reason: 'concurrency' });
   });
 
-  test('al finalizar una llamada se libera un hueco de concurrencia', () => {
+  test('ending a call frees a concurrency slot', () => {
     registerCallStart();
     registerCallStart();
     registerCallEnd();
@@ -46,8 +46,8 @@ describe('callLimiter', () => {
     assert.equal(_snapshot().activeCalls, 1);
   });
 
-  test('bloquea al alcanzar el tope diario, aunque no haya llamadas activas', () => {
-    // 3 llamadas que empiezan y terminan: concurrencia 0, pero cuenta diaria = 3.
+  test('blocks when the daily cap is reached, even with no active calls', () => {
+    // 3 calls that start and end: concurrency 0, but daily count = 3.
     for (let i = 0; i < 3; i += 1) {
       registerCallStart();
       registerCallEnd();
@@ -56,27 +56,27 @@ describe('callLimiter', () => {
     assert.deepEqual(canAcceptCall(), { ok: false, reason: 'daily' });
   });
 
-  test('la cuenta diaria se reinicia al cambiar de día (UTC)', () => {
-    const hoy = new Date('2026-09-28T23:59:00Z');
+  test('the daily count resets when the day changes (UTC)', () => {
+    const today = new Date('2026-09-28T23:59:00Z');
     for (let i = 0; i < 3; i += 1) {
-      registerCallStart(hoy);
+      registerCallStart(today);
       registerCallEnd();
     }
-    assert.deepEqual(canAcceptCall(hoy), { ok: false, reason: 'daily' });
+    assert.deepEqual(canAcceptCall(today), { ok: false, reason: 'daily' });
 
-    const manana = new Date('2026-09-29T00:01:00Z');
-    assert.deepEqual(canAcceptCall(manana), { ok: true });
+    const tomorrow = new Date('2026-09-29T00:01:00Z');
+    assert.deepEqual(canAcceptCall(tomorrow), { ok: true });
     assert.equal(_snapshot().callsToday, 0);
   });
 
-  test('con límites a 0, no hay tope (sin límite)', () => {
+  test('with limits at 0, there is no cap (unlimited)', () => {
     config.limits.maxConcurrentCalls = 0;
     config.limits.maxCallsPerDay = 0;
     for (let i = 0; i < 10; i += 1) registerCallStart();
     assert.deepEqual(canAcceptCall(), { ok: true });
   });
 
-  test('registerCallEnd no baja de cero', () => {
+  test('registerCallEnd does not go below zero', () => {
     registerCallEnd();
     registerCallEnd();
     assert.equal(_snapshot().activeCalls, 0);

@@ -1,21 +1,21 @@
-// Token de un solo uso (corta vida) para autenticar el WebSocket /media-stream.
+// Single-use, short-lived token to authenticate the /media-stream WebSocket.
 //
-// Problema: /media-stream es un WebSocket público. Sin protección, cualquiera que
-// descubra la URL podría abrirlo y forzarnos a conectar con OpenAI (gastando tokens).
-// Twilio, en cambio, solo conoce la URL porque se la damos en el TwiML del webhook
-// (que a su vez está protegido por la firma de Twilio, ver twilioSignature.js).
+// Problem: /media-stream is a public WebSocket. Without protection, anyone who discovers
+// the URL could open it and force us to connect to OpenAI (burning tokens). Twilio, on
+// the other hand, only knows the URL because we hand it over in the webhook TwiML (which
+// is itself protected by the Twilio signature, see twilioSignature.js).
 //
-// Solución: al generar el TwiML incrustamos en la URL del <Stream> un token firmado con
-// HMAC-SHA256 y con caducidad. Al abrirse el WebSocket, verificamos el token ANTES de
-// conectar con OpenAI. El token no necesita estado en servidor: la firma y la marca de
-// expiración se validan solas (stateless).
+// Solution: when generating the TwiML we embed a token in the <Stream> URL, signed with
+// HMAC-SHA256 and with an expiry. When the WebSocket opens, we verify the token BEFORE
+// connecting to OpenAI. The token needs no server-side state: the signature and the
+// expiry timestamp are self-validating (stateless).
 //
-// Formato del token:  base64url(JSON payload) + "." + base64url(HMAC-SHA256(payload))
-// Payload: { exp: <epoch en segundos> }
+// Token format:  base64url(JSON payload) + "." + base64url(HMAC-SHA256(payload))
+// Payload: { exp: <epoch in seconds> }
 //
-// Si no hay `STREAM_TOKEN_SECRET` configurado, la verificación queda DESACTIVADA (para
-// desarrollo local): createStreamToken() devuelve null y verifyStreamToken() acepta. En
-// producción hay que definir el secreto para que la protección esté activa.
+// If `STREAM_TOKEN_SECRET` is not configured, verification is DISABLED (for local
+// development): createStreamToken() returns null and verifyStreamToken() accepts. In
+// production the secret must be set so the protection is active.
 
 import crypto from 'node:crypto';
 import { config } from '../config/index.js';
@@ -25,9 +25,9 @@ function sign(data, secret) {
 }
 
 /**
- * Crea un token firmado con caducidad. Devuelve null si no hay secreto configurado
- * (protección desactivada en dev).
- * @param {number} [now] epoch en ms (inyectable para tests)
+ * Creates a signed token with an expiry. Returns null if no secret is configured
+ * (protection disabled in dev).
+ * @param {number} [now] epoch in ms (injectable for tests)
  * @returns {string|null}
  */
 export function createStreamToken(now = Date.now()) {
@@ -40,14 +40,14 @@ export function createStreamToken(now = Date.now()) {
 }
 
 /**
- * Verifica un token del stream.
+ * Verifies a stream token.
  * @param {string|undefined} token
- * @param {number} [now] epoch en ms (inyectable para tests)
+ * @param {number} [now] epoch in ms (injectable for tests)
  * @returns {{valid: boolean, reason?: string}}
  */
 export function verifyStreamToken(token, now = Date.now()) {
   const { streamTokenSecret } = config.security;
-  // Sin secreto: protección desactivada (dev). Aceptamos pero lo señalamos.
+  // No secret: protection disabled (dev). We accept but flag it.
   if (!streamTokenSecret) return { valid: true, reason: 'disabled' };
 
   if (!token || typeof token !== 'string') return { valid: false, reason: 'missing' };
@@ -55,7 +55,7 @@ export function verifyStreamToken(token, now = Date.now()) {
   const [data, sig] = token.split('.');
   if (!data || !sig) return { valid: false, reason: 'malformed' };
 
-  // Comparación en tiempo constante para no filtrar información por temporización.
+  // Constant-time comparison so we don't leak information through timing.
   const expected = sign(data, streamTokenSecret);
   const sigBuf = Buffer.from(sig);
   const expBuf = Buffer.from(expected);

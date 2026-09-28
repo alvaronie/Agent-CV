@@ -1,20 +1,20 @@
-// Guard de llamada (Fase 6): dos guardarraíles de coste/UX durante la conversación.
+// Call guard (Phase 6): two cost/UX guardrails during the conversation.
 //
-//   - Timeout por silencio: si no hay NINGUNA actividad (ni habla del llamante ni voz
-//     del agente) durante `silenceMs`, se considera llamada muerta y se cierra.
-//   - Máximo de turnos del llamante: si la conversación se alarga sin avanzar, se
-//     cierra al superar `maxCallerTurns`.
+//   - Silence timeout: if there is NO activity at all (neither caller speech nor agent
+//     voice) for `silenceMs`, the call is considered dead and is closed.
+//   - Max caller turns: if the conversation drags on without progress, it is closed
+//     once `maxCallerTurns` is exceeded.
 //
-// La lógica se aísla aquí, con los temporizadores INYECTABLES (setTimer/clearTimer),
-// para poder probarla sin abrir WebSockets ni esperar en tiempo real. `0` en cualquiera
-// de los límites lo desactiva.
+// The logic is isolated here, with INJECTABLE timers (setTimer/clearTimer), so it can be
+// tested without opening WebSockets or waiting in real time. `0` in either limit
+// disables it.
 
 /**
  * @param {object} opts
- * @param {number} opts.silenceMs - ms de inactividad antes de cerrar (0 = desactivado)
- * @param {number} opts.maxCallerTurns - turnos del llamante máximos (0 = desactivado)
- * @param {() => void} [opts.onSilence] - se invoca al agotarse el silencio
- * @param {() => void} [opts.onMaxTurns] - se invoca al superar el máximo de turnos
+ * @param {number} opts.silenceMs - ms of inactivity before closing (0 = disabled)
+ * @param {number} opts.maxCallerTurns - maximum caller turns (0 = disabled)
+ * @param {() => void} [opts.onSilence] - invoked when the silence timeout fires
+ * @param {() => void} [opts.onMaxTurns] - invoked when the max turns is exceeded
  * @param {typeof setTimeout} [opts.setTimer]
  * @param {typeof clearTimeout} [opts.clearTimer]
  */
@@ -39,16 +39,16 @@ export function createCallGuard({
   }
 
   return {
-    /** Arranca el guard (arma el timer de silencio). */
+    /** Starts the guard (arms the silence timer). */
     start() {
       armSilence();
     },
-    /** Marca actividad (habla de cualquiera / audio del agente): reinicia el silencio. */
+    /** Marks activity (anyone speaking / agent audio): resets the silence timer. */
     activity() {
       armSilence();
     },
     /**
-     * Contabiliza un turno del llamante. Devuelve true (y avisa) si se supera el máximo.
+     * Counts a caller turn. Returns true (and notifies) if the maximum is exceeded.
      * @returns {boolean}
      */
     countCallerTurn() {
@@ -59,7 +59,7 @@ export function createCallGuard({
       }
       return false;
     },
-    /** Detiene el guard: no más disparos ni timers. */
+    /** Stops the guard: no more triggers or timers. */
     stop() {
       stopped = true;
       if (timer) clearTimer(timer);

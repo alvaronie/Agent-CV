@@ -1,6 +1,6 @@
-// Tests de src/services/email.js — envío vía Resend.
+// Tests for src/services/email.js — sending via Resend.
 //
-// Sustituimos globalThis.fetch: no se contacta con Resend en ningún momento.
+// We replace globalThis.fetch: Resend is never contacted.
 
 import { test, describe, beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
@@ -39,7 +39,7 @@ describe('sendSummaryEmail', () => {
     globalThis.fetch = realFetch;
   });
 
-  test('envía el email y devuelve true', async () => {
+  test('sends the email and returns true', async () => {
     stubFetch();
     const sent = await sendSummaryEmail({ subject: 'Asunto', body: 'Cuerpo' });
 
@@ -51,7 +51,7 @@ describe('sendSummaryEmail', () => {
     assert.equal(lastRequest.body.text, 'Cuerpo');
   });
 
-  test('admite varios destinatarios separados por comas', async () => {
+  test('accepts several comma-separated recipients', async () => {
     stubFetch();
     config.email.to = 'uno@example.com, dos@example.com';
     await sendSummaryEmail({ subject: 'A', body: 'B' });
@@ -59,28 +59,28 @@ describe('sendSummaryEmail', () => {
     assert.deepEqual(lastRequest.body.to, ['uno@example.com', 'dos@example.com']);
   });
 
-  test('sin API key no envía y devuelve false, sin lanzar error', async () => {
+  test('without an API key it does not send and returns false, without throwing', async () => {
     stubFetch();
     config.email.apiKey = '';
     const sent = await sendSummaryEmail({ subject: 'A', body: 'B' });
 
     assert.equal(sent, false);
-    assert.equal(lastRequest, null, 'no debe llamarse a la API');
+    assert.equal(lastRequest, null, 'the API must not be called');
   });
 
-  test('proveedor no soportado: no envía y devuelve false', async () => {
+  test('unsupported provider: does not send and returns false', async () => {
     stubFetch();
     config.email.provider = 'sendgrid';
     assert.equal(await sendSummaryEmail({ subject: 'A', body: 'B' }), false);
     assert.equal(lastRequest, null);
   });
 
-  test('error HTTP: devuelve false sin lanzar', async () => {
+  test('HTTP error: returns false without throwing', async () => {
     stubFetch({ ok: false, status: 422 });
     assert.equal(await sendSummaryEmail({ subject: 'A', body: 'B' }), false);
   });
 
-  test('error de red: devuelve false sin lanzar', async () => {
+  test('network error: returns false without throwing', async () => {
     globalThis.fetch = async () => {
       throw new Error('ECONNREFUSED');
     };

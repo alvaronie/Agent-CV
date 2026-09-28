@@ -1,74 +1,87 @@
 # Agent CV
 
-Agente de voz con IA que responde llamadas telefónicas con información sobre mi CV.
-Las empresas pueden llamar, hacer preguntas, pedir que se transfiera la llamada a mi
-móvil o dejar sus datos de contacto. Al colgar, recibo un email con el resumen.
+An AI voice agent that answers phone calls with information about my CV. Companies can
+call, ask questions, request to be transferred to my mobile, or leave their contact
+details. When the call ends, I receive an email with the summary.
 
-## Arquitectura (Camino B — DIY)
+## Architecture (Path B — DIY)
 
 ```
-Llamada entrante
+Incoming call
       │
       ▼
-  Twilio (número + Media Streams)
-      │  audio en streaming (WebSocket)
+  Twilio (number + Media Streams)
+      │  streaming audio (WebSocket)
       ▼
-  Backend Node.js  ◄──►  OpenAI Realtime API (STT + LLM + TTS)
+  Node.js backend  ◄──►  OpenAI Realtime API (STT + LLM + TTS)
       │
-      ├─ tool: transferir_llamada  → Twilio <Dial> a mi móvil
-      ├─ tool: guardar_contacto    → storage (DB / Sheets)
-      └─ al colgar: resumen (LLM) → email (SES / SendGrid / Resend)
+      ├─ tool: transfer_call  → Twilio <Dial> to my mobile
+      ├─ tool: save_contact   → storage (JSONL / DB)
+      └─ on hangup: summary (LLM) → email (Resend)
 ```
 
-## Estructura del proyecto
+## Project structure
 
 ```
 Agent CV/
 ├── README.md
+├── render.yaml               # Render deployment blueprint
 ├── .gitignore
-├── .env.example              # plantilla de variables de entorno
+├── .env.example              # environment variable template
 ├── package.json
 ├── src/
-│   ├── index.js              # servidor HTTP + WebSocket (punto de entrada)
+│   ├── index.js              # HTTP + WebSocket server (entry point)
 │   ├── config/
-│   │   └── index.js          # carga y valida variables de entorno
+│   │   └── index.js          # loads and validates environment variables
 │   ├── telephony/
-│   │   ├── twilioWebhook.js  # webhook de llamada entrante (devuelve TwiML)
-│   │   └── mediaStream.js    # maneja el WebSocket de Media Streams
+│   │   ├── twilioWebhook.js  # incoming-call webhook (returns TwiML)
+│   │   ├── mediaStream.js    # handles the Media Streams WebSocket
+│   │   ├── callLimiter.js    # concurrency / daily call limits
+│   │   ├── callGuard.js      # silence timeout / max caller turns
+│   │   └── twilioClient.js   # shared Twilio REST client
 │   ├── realtime/
-│   │   └── openaiRealtime.js # conexión con OpenAI Realtime API
+│   │   ├── openaiRealtime.js # connection to the OpenAI Realtime API
+│   │   └── reconnectPolicy.js# reconnection backoff policy
+│   ├── security/
+│   │   ├── twilioSignature.js# X-Twilio-Signature validation
+│   │   └── streamToken.js    # HMAC token for the media-stream WebSocket
 │   ├── agent/
-│   │   ├── prompt.js         # construye el system prompt con el CV
+│   │   ├── prompt.js         # builds the system prompt with the CV
 │   │   └── tools/
 │   │       ├── transferCall.js
 │   │       ├── saveContact.js
 │   │       └── endCall.js
 │   ├── services/
-│   │   ├── summary.js        # genera el resumen de la llamada con el LLM
-│   │   ├── email.js          # envía el email resumen (Resend)
-│   │   ├── callReport.js     # orquesta resumen + email + registro al colgar
-│   │   └── storage.js        # guarda contactos y registros de llamada
+│   │   ├── summary.js        # generates the call summary with the LLM
+│   │   ├── email.js          # sends the summary email (Resend)
+│   │   ├── callReport.js     # orchestrates summary + email + record on hangup
+│   │   └── storage.js        # saves contacts and call records
 │   └── utils/
-│       └── logger.js
+│       ├── logger.js
+│       └── logFormat.js
 ├── data/
 │   └── cv/
-│       └── cv.md             # AQUÍ va el contenido de mi CV
-├── scripts/                  # scripts auxiliares (setup, pruebas locales)
-└── tests/                    # tests
+│       └── cv.md             # the CV content goes HERE
+├── scripts/                  # helper scripts (setup, local testing)
+└── tests/                    # tests (node --test)
 ```
 
-## Puesta en marcha (resumen — se detallará paso a paso)
+## Getting started (local)
 
 1. `npm install`
-2. Copiar `.env.example` a `.env` y rellenar las claves.
-3. Poner el CV en `data/cv/cv.md`.
-4. `npm run dev` para levantar el backend en local.
-5. Exponer el puerto con un túnel (ngrok) y apuntar el webhook de Twilio a esa URL.
+2. Copy `.env.example` to `.env` and fill in the keys.
+3. Put the CV in `data/cv/cv.md`.
+4. `npm run dev` to start the backend locally.
+5. `npm test` to run the unit tests (no network calls).
 
-## Estado
+## Status
 
-Fases 1-5 implementadas (servidor, puente de audio en tiempo real, CV y personalidad,
-acciones del agente, y resumen por email al colgar). En curso: Fase 6 (robustez y
-guardarraíles). La prueba con llamada real queda pendiente del despliegue (Fase 7).
+Phases 1–6 implemented: server, real-time audio bridge, CV and personality, agent
+actions, post-call email summary, and robustness/guardrails (Twilio signature validation,
+media-stream authentication, concurrency/daily limits, OpenAI reconnection, silence and
+max-turns timeouts, prompt-injection resistance, PII-safe logs, structured logging).
+Phase 7 (cloud deployment) is prepared for Render; the first real phone-call test happens
+once deployed.
 
-Detalle completo del plan, las decisiones y el estado en [`docs/BITACORA.md`](docs/BITACORA.md).
+Full plan, decisions and status in [`docs/PROJECT_LOG.md`](docs/PROJECT_LOG.md).
+Deployment guide in [`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md).
