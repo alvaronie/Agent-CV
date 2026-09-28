@@ -28,7 +28,9 @@ async function appendJson(file, obj) {
 export async function saveContact(contact) {
   const record = { ...contact, savedAt: new Date().toISOString() };
   await appendJson(CONTACTS_FILE, record);
-  logger.info(`[storage] contacto guardado (${contact?.name ?? 'sin nombre'})`);
+  // No logueamos el nombre ni otros datos del contacto: son PII de terceros. Solo el
+  // callSid (identificador interno) para poder correlacionar sin exponer datos.
+  logger.info(`[storage] contacto guardado (callSid=${contact?.callSid ?? 's/callSid'})`);
   return record;
 }
 
