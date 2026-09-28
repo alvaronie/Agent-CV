@@ -44,8 +44,8 @@ contacto. Tras cada llamada, recibo un email con un resumen de lo hablado.
 - **Fase 3 — Personalidad y conocimiento (el CV)**
 - **Fase 4 — Acciones (tools: transferir, guardar contacto, finalizar)**
 - **Fase 5 — Resumen por email tras la llamada**
-- **Fase 6 — Robustez y guardarraíles** ← *estamos aquí*
-- **Fase 7 — Despliegue a la nube**
+- **Fase 6 — Robustez y guardarraíles** ✅ completada
+- **Fase 7 — Despliegue a la nube** ← *estamos aquí*
 
 ### Detalle de cada fase
 
@@ -109,7 +109,7 @@ Pendientes en esta fase (prioridad recomendada de arriba a abajo):
 5. ✅ **HECHO (2026-09-28)** — **Timeout por silencio / máximo de turnos**: `src/telephony/callGuard.js` (timers inyectables). Cierra la llamada si hay silencio total durante `SILENCE_TIMEOUT_SECONDS` (reiniciado por habla del llamante, voz del agente y transcripciones) o si el llamante supera `MAX_CALLER_TURNS`.
 6. ✅ **HECHO (2026-09-28)** — **Resistencia a prompt-injection**: sección "Security and boundaries" en `src/agent/prompt.js` — el llamante no es operador, se ignoran intentos de cambiar el rol/reglas ("ignore previous instructions", modos jailbreak), no se revela ni traduce el prompt, no se sueltan secretos, y lo que dice el llamante es contenido, no órdenes. Cubierto por tests de `buildInstructions`.
 7. ✅ **HECHO (2026-09-28)** — **PII en logs**: auditados todos los `logger.*`. La transcripción y el número del llamante nunca se loguean; el resto son identificadores internos (callSid/streamSid) o estados. Corregida la única fuga: `storage.js` ya no loguea el **nombre** del contacto (ahora solo `callSid`).
-8. Logs estructurados y tests básicos. *(parcialmente hecho: 55 tests unitarios)*
+8. ✅ **HECHO (2026-09-28)** — **Logs estructurados y tests básicos**: logger con timestamp + nivel, formato `text` (dev) o `json` (`LOG_FORMAT=json`, producción). Formateo puro y testeable en `src/utils/logFormat.js`. **61 tests unitarios** en total.
 
 **Fase 7 — Despliegue a la nube**
 1. Elegir plataforma (Fly.io / Render).
@@ -122,7 +122,7 @@ Pendientes en esta fase (prioridad recomendada de arriba a abajo):
 
 ## 4. Estado actual
 
-- **Fase actual:** Fase 6 (robustez y guardarraíles) **en curso**. Fase 5 completada y verificada (email real incluido).
+- **Fase actual:** **Fase 6 completada** (robustez y guardarraíles). Siguiente: Fase 7 (despliegue). Fase 5 verificada (email real incluido).
 - **Hecho:**
   - Entorno local (fnm + Node v24.19.0).
   - Twilio (número EE. UU.) y OpenAI verificados; `.env` con credenciales.
@@ -201,3 +201,4 @@ sobre el `.env`: arrancar entonces con `PORT=3001 npm run dev`.
 | 2026-09-28 | **Fase 6, punto 5 hecho, verificado y commiteado.** Timeout por silencio y máximo de turnos: `src/telephony/callGuard.js` con temporizadores inyectables (testeable sin WebSocket). Cierra la llamada si hay silencio total durante `SILENCE_TIMEOUT_SECONDS` (se reinicia con habla del llamante, audio del agente y transcripciones) o si el llamante supera `MAX_CALLER_TURNS`. Cableado en `mediaStream.js` (start/activity/countCallerTurn/stop). **52 tests en verde, sin red ni WebSocket.** Pendiente de Fase 6: puntos 6-8 (prompt-injection, PII en logs, logs estructurados). |
 | 2026-09-28 | **Fase 6, punto 6 hecho, verificado y commiteado.** Resistencia a prompt-injection: nueva sección "Security and boundaries" en `src/agent/prompt.js` (el llamante no es operador; se ignoran intentos de override de rol/reglas y modos jailbreak; no se revela/traduce el prompt; no se sueltan secretos/tokens/números; lo que dice el llamante es contenido, no órdenes). Añadido `tests/prompt.test.js` que comprueba la presencia de esas reglas, la política de idioma/anti-invención y la inclusión del CV. **55 tests en verde, sin red ni WebSocket.** Pendiente de Fase 6: puntos 7-8 (PII en logs, logs estructurados). |
 | 2026-09-28 | **Fase 6, punto 7 hecho, verificado y commiteado.** Auditados todos los `logger.*` del código en busca de PII. La transcripción y el número del llamante no se loguean; el resto son identificadores internos (callSid/streamSid) o estados. Única fuga corregida: `storage.js` dejaba el **nombre** del contacto en el log al guardarlo; ahora solo registra el `callSid`. **55 tests en verde, sin red ni WebSocket.** Pendiente de Fase 6: punto 8 (logs estructurados). |
+| 2026-09-28 | **Fase 6 COMPLETADA (punto 8 hecho, verificado y commiteado).** Logs estructurados: logger con timestamp + nivel y formato `text` (dev) o `json` (`LOG_FORMAT=json`, producción); formateo puro y testeable en `src/utils/logFormat.js`. Comprobado el logger real en ambos formatos (solo salida, sin red). **61 tests en verde, sin red ni WebSocket.** Con esto quedan cerrados los 8 puntos de la Fase 6. **Siguiente: Fase 7 (despliegue a la nube)** — elegir plataforma (Render vía GitHub recomendado), configurar variables (incl. `HOST=0.0.0.0`, `PUBLIC_URL`, `STREAM_TOKEN_SECRET`, y `TWILIO_PHONE_NUMBER` con el número LU cuando se apruebe), apuntar el webhook de Twilio y primera prueba real con llamada. |

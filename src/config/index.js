@@ -32,6 +32,9 @@ export const config = {
   host: process.env.HOST || '127.0.0.1',
   publicUrl: process.env.PUBLIC_URL || '',
 
+  // Formato de los logs: 'text' (legible, dev) o 'json' (agregadores, producción).
+  logFormat: (process.env.LOG_FORMAT || 'text').toLowerCase() === 'json' ? 'json' : 'text',
+
   openai: {
     apiKey: process.env.OPENAI_API_KEY || '',
     model: process.env.OPENAI_REALTIME_MODEL || 'gpt-realtime-mini',
