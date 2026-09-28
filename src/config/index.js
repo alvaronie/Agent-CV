@@ -40,6 +40,8 @@ export const config = {
     transcribeModel: process.env.OPENAI_TRANSCRIBE_MODEL || 'whisper-1',
     // Modelo de texto que redacta el resumen al colgar (Fase 5).
     summaryModel: process.env.OPENAI_SUMMARY_MODEL || 'gpt-4o-mini',
+    // Reintentos de reconexión si el WebSocket de OpenAI se cae a media llamada (Fase 6).
+    reconnectMaxAttempts: numEnv('OPENAI_RECONNECT_MAX_ATTEMPTS', 3),
   },
 
   twilio: {

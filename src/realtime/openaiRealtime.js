@@ -11,105 +11,92 @@
 //    formato { type: "audio/pcmu" } para casar con Twilio (G.711 μ-law 8kHz).
 //  - Audio de salida del modelo: evento response.output_audio.delta (base64).
 //  - Interrupción (barge-in): input_audio_buffer.speech_started.
+//
+// ROBUSTEZ (Fase 6): si el WebSocket se cae de forma inesperada a media llamada,
+// reintentamos reconectar con backoff (ver reconnectPolicy.js). Al reconectar se
+// reconfigura la sesión (instrucciones + tools), pero NO se repite el saludo. Si se
+// agotan los reintentos, avisamos vía handlers.onClose para que el puente cierre la
+// llamada y no quede audio muerto. Nota: una sesión Realtime nueva no conserva el
+// historial de la conversación; el agente mantiene su identidad (system prompt) pero
+// pierde el contexto de los turnos previos, lo cual es aceptable como último recurso.
 
 import WebSocket from 'ws';
 import { config } from '../config/index.js';
 import { logger } from '../utils/logger.js';
+import { nextReconnect } from './reconnectPolicy.js';
 
 const REALTIME_URL = `wss://api.openai.com/v1/realtime?model=${encodeURIComponent(config.openai.model)}`;
 
-/**
- * Abre una sesión Realtime.
- * @param {object} opts
- * @param {string} opts.instructions - System prompt (personalidad + CV).
- * @param {Array}  [opts.tools] - Definiciones de tools (Fase 4).
- * @param {string} [opts.greeting] - Instrucción para el saludo inicial (que hable primero).
- * @param {object} [opts.handlers] - Callbacks: onAudioDelta(base64), onSpeechStarted(),
- *                                    onFunctionCall(event), onTranscript(role, text),
- *                                    onClose().
- * @returns {{ sendAudio: (b64:string)=>void, sendFunctionResult: (callId:string, output:string)=>void, close: ()=>void }}
- */
 export function connectRealtime({ instructions, tools = [], greeting, handlers = {} }) {
-  const ws = new WebSocket(REALTIME_URL, {
-    headers: { Authorization: `Bearer ${config.openai.apiKey}` },
-  });
+  let ws = null;
+  let intentionalClose = false;
+  let hasGreeted = false;
+  let reconnectAttempts = 0;
+  let reconnectTimer = null;
 
-  ws.on('open', () => logger.info('[realtime] conectado a OpenAI'));
+  function buildSessionUpdate() {
+    return {
+      type: 'session.update',
+      session: {
+        type: 'realtime',
+        instructions,
+        audio: {
+          input: {
+            format: { type: 'audio/pcmu' },
+            turn_detection: { type: 'server_vad' },
+            // Subtítulos del audio del llamante. Sin esto no hay forma de saber qué
+            // dijo: el modelo es speech-to-speech y no devuelve texto del lado de
+            // entrada. Necesario para el resumen de la Fase 5.
+            transcription: { model: config.openai.transcribeModel },
+          },
+          output: {
+            format: { type: 'audio/pcmu' },
+            voice: config.openai.voice,
+          },
+        },
+        ...(tools.length ? { tools, tool_choice: 'auto' } : {}),
+      },
+    };
+  }
 
-  ws.on('message', (raw) => {
-    let event;
-    try {
-      event = JSON.parse(raw.toString());
-    } catch {
-      return;
-    }
-
+  function handleEvent(event) {
     switch (event.type) {
       case 'session.created':
-        // Configuramos la sesión en cuanto está lista.
-        ws.send(
-          JSON.stringify({
-            type: 'session.update',
-            session: {
-              type: 'realtime',
-              instructions,
-              audio: {
-                input: {
-                  format: { type: 'audio/pcmu' },
-                  turn_detection: { type: 'server_vad' },
-                  // Subtítulos del audio del llamante. Sin esto no hay forma de saber
-                  // qué dijo: el modelo es speech-to-speech y no devuelve texto del
-                  // lado de entrada. Necesario para el resumen de la Fase 5.
-                  transcription: { model: config.openai.transcribeModel },
-                },
-                output: {
-                  format: { type: 'audio/pcmu' },
-                  voice: config.openai.voice,
-                },
-              },
-              ...(tools.length ? { tools, tool_choice: 'auto' } : {}),
-            },
-          })
-        );
+        // Conexión establecida: reseteamos el contador de reintentos y configuramos.
+        reconnectAttempts = 0;
+        ws.send(JSON.stringify(buildSessionUpdate()));
         break;
 
       case 'session.updated':
-        // La sesión ya está configurada. Si queremos que el agente hable primero,
-        // lanzamos una respuesta inicial (saludo).
-        if (greeting) {
+        // Sesión lista. Si queremos que el agente hable primero, lanzamos el saludo,
+        // pero SOLO la primera vez (no tras una reconexión).
+        if (greeting && !hasGreeted) {
+          hasGreeted = true;
           ws.send(
-            JSON.stringify({
-              type: 'response.create',
-              response: { instructions: greeting },
-            })
+            JSON.stringify({ type: 'response.create', response: { instructions: greeting } })
           );
         }
         break;
 
       case 'response.output_audio.delta':
-        // Fragmento de audio de la respuesta del modelo (base64, μ-law).
         handlers.onAudioDelta?.(event.delta);
         break;
 
       case 'input_audio_buffer.speech_started':
-        // El usuario ha empezado a hablar: interrupción (barge-in).
         handlers.onSpeechStarted?.();
         break;
 
       case 'conversation.item.input_audio_transcription.completed':
-        // Transcripción de un turno del llamante (ya completo).
         if (event.transcript) handlers.onTranscript?.('caller', event.transcript);
         break;
 
-      // Transcripción de un turno del agente. El nombre del evento cambió entre la
-      // versión beta y la GA de la Realtime API, así que aceptamos ambos.
+      // El nombre del evento de transcripción del agente cambió entre beta y GA.
       case 'response.output_audio_transcript.done':
       case 'response.audio_transcript.done':
         if (event.transcript) handlers.onTranscript?.('agent', event.transcript);
         break;
 
       case 'response.function_call_arguments.done':
-        // El modelo quiere ejecutar una tool (se maneja en la Fase 4).
         handlers.onFunctionCall?.(event);
         break;
 
@@ -118,27 +105,68 @@ export function connectRealtime({ instructions, tools = [], greeting, handlers =
         break;
 
       default:
-        // Otros eventos de ciclo de vida no son necesarios para el puente básico.
         break;
     }
-  });
+  }
 
-  ws.on('close', () => {
-    logger.info('[realtime] desconectado');
-    handlers.onClose?.();
-  });
-  ws.on('error', (err) => logger.error('[realtime] ws error:', err.message));
+  function handleUnexpectedClose() {
+    const { shouldReconnect, delayMs } = nextReconnect({
+      attempt: reconnectAttempts,
+      maxAttempts: config.openai.reconnectMaxAttempts,
+    });
+    if (!shouldReconnect) {
+      logger.error('[realtime] reconexión agotada; se cierra la sesión');
+      handlers.onClose?.();
+      return;
+    }
+    reconnectAttempts += 1;
+    logger.warn(
+      `[realtime] desconexión inesperada; reconectando en ${delayMs}ms ` +
+        `(intento ${reconnectAttempts}/${config.openai.reconnectMaxAttempts})`
+    );
+    reconnectTimer = setTimeout(connect, delayMs);
+  }
+
+  function connect() {
+    ws = new WebSocket(REALTIME_URL, {
+      headers: { Authorization: `Bearer ${config.openai.apiKey}` },
+    });
+
+    ws.on('open', () => logger.info('[realtime] conectado a OpenAI'));
+
+    ws.on('message', (raw) => {
+      let event;
+      try {
+        event = JSON.parse(raw.toString());
+      } catch {
+        return;
+      }
+      handleEvent(event);
+    });
+
+    ws.on('close', () => {
+      if (intentionalClose) {
+        logger.info('[realtime] desconectado (cierre intencionado)');
+        return;
+      }
+      handleUnexpectedClose();
+    });
+
+    ws.on('error', (err) => logger.error('[realtime] ws error:', err.message));
+  }
+
+  connect();
 
   return {
     /** Envía un fragmento de audio entrante (base64 μ-law) al modelo. */
     sendAudio(base64) {
-      if (ws.readyState === WebSocket.OPEN) {
+      if (ws && ws.readyState === WebSocket.OPEN) {
         ws.send(JSON.stringify({ type: 'input_audio_buffer.append', audio: base64 }));
       }
     },
     /** Devuelve al modelo el resultado de una tool (Fase 4). */
     sendFunctionResult(callId, output, { triggerResponse = true } = {}) {
-      if (ws.readyState !== WebSocket.OPEN) return;
+      if (!ws || ws.readyState !== WebSocket.OPEN) return;
       ws.send(
         JSON.stringify({
           type: 'conversation.item.create',
@@ -152,8 +180,10 @@ export function connectRealtime({ instructions, tools = [], greeting, handlers =
       }
     },
     close() {
+      intentionalClose = true;
+      if (reconnectTimer) clearTimeout(reconnectTimer);
       try {
-        ws.close();
+        ws?.close();
       } catch {
         /* noop */
       }

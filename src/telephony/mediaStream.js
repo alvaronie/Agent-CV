@@ -123,6 +123,16 @@ export async function handleMediaStream(twilioWs) {
         // en los logs: es contenido personal de terceros.
         turns.push({ role, text });
       },
+      onClose() {
+        // OpenAI se cayó y se agotaron los reintentos: cerramos la llamada para no
+        // dejar audio muerto. Al cerrarse el WebSocket de Twilio se dispara el resumen.
+        logger.warn('[media] OpenAI no disponible; cerrando la llamada');
+        try {
+          twilioWs.close();
+        } catch {
+          /* noop */
+        }
+      },
       async onFunctionCall(event) {
         // El modelo quiere ejecutar una tool. La ejecutamos y devolvemos el resultado.
         const ctx = { callSid, streamSid, twilioWs, realtime, endCall };
