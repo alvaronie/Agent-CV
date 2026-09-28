@@ -1,0 +1,26 @@
+{
+  "name": "agent-cv",
+  "version": "0.1.0",
+  "description": "Agente de voz con IA que responde llamadas con informacion de mi CV",
+  "type": "module",
+  "main": "src/index.js",
+  "scripts": {
+    "start": "node src/index.js",
+    "dev": "node --watch src/index.js",
+    "test": "node --test"
+  },
+  "keywords": [
+    "voice-ai",
+    "twilio",
+    "openai-realtime",
+    "cv"
+  ],
+  "license": "MIT",
+  "dependencies": {
+    "@fastify/formbody": "9.0.0",
+    "@fastify/websocket": "11.3.0",
+    "fastify": "5.11.3",
+    "twilio": "6.1.0",
+    "ws": "8.21.3"
+  }
+}

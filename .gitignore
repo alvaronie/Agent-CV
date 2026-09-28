@@ -1,0 +1,26 @@
+# Dependencias
+node_modules/
+
+# Variables de entorno y secretos
+.env
+.env.local
+*.pem
+credentials.json
+
+# Logs
+logs/
+*.log
+npm-debug.log*
+
+# Datos sensibles / registros de llamadas
+data/calls/
+data/contacts/
+data/contacts.jsonl
+data/calls.jsonl
+
+# Sistema
+.DS_Store
+
+# Build
+dist/
+build/
