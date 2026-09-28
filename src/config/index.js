@@ -84,4 +84,8 @@ export const config = {
   },
 
   maxCallSeconds: Number(process.env.MAX_CALL_SECONDS) || 600,
+  // Cierra la llamada si no hay actividad (silencio total) durante este tiempo. 0 = off.
+  silenceTimeoutSeconds: numEnv('SILENCE_TIMEOUT_SECONDS', 20),
+  // Máximo de turnos del llamante antes de cerrar (guardarraíl anti-bucle). 0 = off.
+  maxCallerTurns: numEnv('MAX_CALLER_TURNS', 40),
 };

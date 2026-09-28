@@ -22,6 +22,7 @@ import { toolDefinitions, dispatchToolCall } from '../agent/tools/index.js';
 import { twilioClient } from './twilioClient.js';
 import { reportCall } from '../services/callReport.js';
 import { registerCallStart, registerCallEnd } from './callLimiter.js';
+import { createCallGuard } from './callGuard.js';
 import { config } from '../config/index.js';
 import { logger } from '../utils/logger.js';
 
@@ -99,6 +100,29 @@ export async function handleMediaStream(twilioWs) {
     });
   }
 
+  // Guard de silencio y máximo de turnos del llamante. Cerrar el WebSocket de Twilio
+  // termina la llamada (el <Connect><Stream> se completa) y dispara el resumen.
+  const guard = createCallGuard({
+    silenceMs: config.silenceTimeoutSeconds * 1000,
+    maxCallerTurns: config.maxCallerTurns,
+    onSilence() {
+      logger.warn('[media] silencio prolongado; cerrando la llamada');
+      try {
+        twilioWs.close();
+      } catch {
+        /* noop */
+      }
+    },
+    onMaxTurns() {
+      logger.warn('[media] máximo de turnos alcanzado; cerrando la llamada');
+      try {
+        twilioWs.close();
+      } catch {
+        /* noop */
+      }
+    },
+  });
+
   const realtime = connectRealtime({
     instructions,
     tools: toolDefinitions,
@@ -106,6 +130,7 @@ export async function handleMediaStream(twilioWs) {
     handlers: {
       onAudioDelta(base64) {
         // Voz del modelo -> Twilio (hacia el llamante).
+        guard.activity();
         if (streamSid) {
           twilioWs.send(
             JSON.stringify({ event: 'media', streamSid, media: { payload: base64 } })
@@ -114,6 +139,7 @@ export async function handleMediaStream(twilioWs) {
       },
       onSpeechStarted() {
         // El usuario interrumpe: vaciamos el audio en cola en Twilio (barge-in).
+        guard.activity();
         if (streamSid) {
           twilioWs.send(JSON.stringify({ event: 'clear', streamSid }));
         }
@@ -122,6 +148,8 @@ export async function handleMediaStream(twilioWs) {
         // Subtítulo de un turno (llamante o agente). Solo en memoria, y no lo volcamos
         // en los logs: es contenido personal de terceros.
         turns.push({ role, text });
+        guard.activity();
+        if (role === 'caller') guard.countCallerTurn();
       },
       onClose() {
         // OpenAI se cayó y se agotaron los reintentos: cerramos la llamada para no
@@ -177,6 +205,7 @@ export async function handleMediaStream(twilioWs) {
         startedAt = new Date();
         registerCallStart();
         counted = true;
+        guard.start();
         logger.info(`[media] stream iniciado (streamSid=${streamSid}, callSid=${callSid})`);
         break;
       case 'media':
@@ -193,6 +222,7 @@ export async function handleMediaStream(twilioWs) {
 
   twilioWs.on('close', () => {
     clearTimeout(maxTimer);
+    guard.stop();
     realtime.close();
     if (counted) {
       registerCallEnd();
