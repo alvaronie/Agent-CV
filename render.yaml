@@ -4,11 +4,10 @@
 # Docs: https://render.com/docs/blueprint-spec
 #
 # IMPORTANT:
-#  - Plan `free`: $0 and no card required, but the instance SLEEPS after 15 min without
-#    traffic and takes ~1 min to wake, which would make incoming calls fail. It is fine
-#    for validating the build/config now. Switch to `plan: starter` (~$7/month,
-#    always-on) before the real phone-call test — a one-line change here plus the
-#    Instance Type in the dashboard.
+#  - Plan `starter` (~$7/month): always-on instance, required for incoming calls. The
+#    `free` plan SLEEPS after 15 min without traffic and takes ~1 min to wake, which
+#    would make incoming calls fail. (During setup we temporarily used `free` to deploy
+#    without a card; switched to `starter` before the real phone-call test.)
 #  - Secrets use `sync: false`: they are NOT stored here; fill them in the Render
 #    dashboard (Environment) after creating the service. This way they never end up in
 #    the repository.
@@ -19,7 +18,7 @@ services:
   - type: web
     name: agent-cv
     runtime: node
-    plan: free
+    plan: starter
     region: frankfurt            # close to Europe (ES/EU callers). Adjustable.
     branch: main
     buildCommand: npm ci
