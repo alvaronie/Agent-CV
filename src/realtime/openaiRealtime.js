@@ -33,6 +33,11 @@ export function connectRealtime({ instructions, tools = [], greeting, handlers =
   let hasGreeted = false;
   let reconnectAttempts = 0;
   let reconnectTimer = null;
+  // Response tracking, used by say(): whether a response is in progress, and tags for
+  // responses we created on demand (so the caller knows when *that* response is done).
+  let activeResponse = false;
+  let pendingTag = null;
+  const taggedResponses = new Map();
 
   function buildSessionUpdate() {
     return {
@@ -77,6 +82,23 @@ export function connectRealtime({ instructions, tools = [], greeting, handlers =
           );
         }
         break;
+
+      case 'response.created':
+        activeResponse = true;
+        if (pendingTag) {
+          taggedResponses.set(event.response?.id, pendingTag);
+          pendingTag = null;
+        }
+        break;
+
+      case 'response.done': {
+        activeResponse = false;
+        const id = event.response?.id;
+        const tag = taggedResponses.get(id) ?? null;
+        taggedResponses.delete(id);
+        handlers.onResponseDone?.(event.response, tag);
+        break;
+      }
 
       case 'response.output_audio.delta':
         handlers.onAudioDelta?.(event.delta);
@@ -128,6 +150,9 @@ export function connectRealtime({ instructions, tools = [], greeting, handlers =
   }
 
   function connect() {
+    activeResponse = false;
+    pendingTag = null;
+    taggedResponses.clear();
     ws = new WebSocket(REALTIME_URL, {
       headers: { Authorization: `Bearer ${config.openai.apiKey}` },
     });
@@ -158,6 +183,20 @@ export function connectRealtime({ instructions, tools = [], greeting, handlers =
   connect();
 
   return {
+    /**
+     * Makes the agent say something now, replacing whatever it was saying. The resulting
+     * response is reported to handlers.onResponseDone with `tag`. Returns false if the
+     * session is not connected.
+     */
+    say(instructions, tag = null) {
+      if (!ws || ws.readyState !== WebSocket.OPEN) return false;
+      if (activeResponse) ws.send(JSON.stringify({ type: 'response.cancel' }));
+      // Drop pending caller audio so server VAD doesn't trigger a competing answer.
+      ws.send(JSON.stringify({ type: 'input_audio_buffer.clear' }));
+      pendingTag = tag;
+      ws.send(JSON.stringify({ type: 'response.create', response: { instructions } }));
+      return true;
+    },
     /** Sends an incoming audio chunk (base64 μ-law) to the model. */
     sendAudio(base64) {
       if (ws && ws.readyState === WebSocket.OPEN) {

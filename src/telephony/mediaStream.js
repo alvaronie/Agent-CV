@@ -12,6 +12,7 @@
 //   barge-in      ─▶ twilio { event:'clear', ... }   (the user interrupts)
 //   function call ─▶ dispatchToolCall(...)           (tools: transfer/contact/end)
 //   transcript    ─▶ turns[]                         (subtitles, in memory only)
+//   limit reached ─▶ spoken farewell with the reason ─▶ Twilio mark ─▶ hang up
 //   on hangup     ─▶ summary (LLM) -> email -> record   (Phase 5)
 //
 // AUTH (Phase 6): Twilio's <Stream> url does not support query strings, so the signed
@@ -29,6 +30,7 @@ import { twilioClient } from './twilioClient.js';
 import { reportCall } from '../services/callReport.js';
 import { registerCallStart, registerCallEnd } from './callLimiter.js';
 import { createCallGuard } from './callGuard.js';
+import { createFarewell } from './farewell.js';
 import { verifyStreamToken } from '../security/streamToken.js';
 import { config } from '../config/index.js';
 import { logger } from '../utils/logger.js';
@@ -45,6 +47,9 @@ const HANGUP_DELAY_MS = 2000;
 
 // Max time (ms) to wait for an authorized `start` event after the WebSocket opens.
 const START_TIMEOUT_MS = 5000;
+
+// Max time (ms) for the limit-triggered farewell to play before hanging up anyway.
+const FAREWELL_TIMEOUT_MS = 15000;
 
 export function handleMediaStream(twilioWs) {
   let streamSid = null;
@@ -81,23 +86,49 @@ export function handleMediaStream(twilioWs) {
     }
   }, START_TIMEOUT_MS);
 
-  // Orderly call teardown: hang up on Twilio (if there is a client and callSid) and
-  // close the WebSocket. Idempotent thanks to `closing`.
-  function endCall() {
+  // Hangs up on Twilio (if there is a client and callSid) and closes the WebSocket.
+  // Idempotent thanks to `closing`.
+  function hangUp() {
     if (closing) return;
     closing = true;
-    setTimeout(async () => {
+    (async () => {
       try {
         if (twilioClient && callSid) {
           await twilioClient.calls(callSid).update({ status: 'completed' });
-          logger.info(`[media] call ${callSid} hung up by end_call`);
+          logger.info(`[media] call ${callSid} hung up`);
         }
       } catch (err) {
         logger.error('[media] error hanging up the call:', err.message);
       } finally {
         safeClose();
       }
-    }, HANGUP_DELAY_MS);
+    })();
+  }
+
+  // end_call tool: the agent has already said goodbye; leave a margin for it to play.
+  let hangupScheduled = false;
+  function endCall() {
+    if (closing || hangupScheduled) return;
+    hangupScheduled = true;
+    setTimeout(hangUp, HANGUP_DELAY_MS);
+  }
+
+  // Limit-triggered farewell (max duration, silence, max turns): the agent explains why
+  // it is hanging up, and we hang up once Twilio confirms the audio has played.
+  const farewell = createFarewell({
+    say: (instructions, tag) => realtime?.say(instructions, tag) ?? false,
+    sendToTwilio: (msg) => {
+      if (streamSid) twilioWs.send(JSON.stringify({ ...msg, streamSid }));
+    },
+    hangUp,
+    timeoutMs: FAREWELL_TIMEOUT_MS,
+  });
+
+  function endWithFarewell(reason) {
+    if (closing || !farewell.begin(reason)) return;
+    logger.warn(`[media] limit reached (${reason}); saying goodbye before hanging up`);
+    guard?.stop();
+    clearTimeout(maxTimer);
   }
 
   // Business-level call teardown: summarize, notify by email and record. Runs exactly
@@ -132,18 +163,15 @@ export function handleMediaStream(twilioWs) {
     const instructions = await buildInstructions();
     if (closed) return; // the caller hung up while we were loading the prompt
 
-    // Silence and max-caller-turns guard. Closing the Twilio WebSocket ends the call
-    // (the <Connect><Stream> completes) and triggers the summary.
+    // Silence and max-caller-turns guard: both end the call with a spoken farewell.
     guard = createCallGuard({
       silenceMs: config.silenceTimeoutSeconds * 1000,
       maxCallerTurns: config.maxCallerTurns,
       onSilence() {
-        logger.warn('[media] prolonged silence; closing the call');
-        safeClose();
+        endWithFarewell('silence');
       },
       onMaxTurns() {
-        logger.warn('[media] max turns reached; closing the call');
-        safeClose();
+        endWithFarewell('max_turns');
       },
     });
 
@@ -177,9 +205,12 @@ export function handleMediaStream(twilioWs) {
         },
         onClose() {
           // OpenAI dropped and retries were exhausted: close the call so we don't leave
-          // dead air. Closing the Twilio WebSocket triggers the summary.
+          // dead air (no farewell possible: the model is gone).
           logger.warn('[media] OpenAI unavailable; closing the call');
           safeClose();
+        },
+        onResponseDone(response, tag) {
+          farewell.onResponseDone(response, tag);
         },
         async onFunctionCall(event) {
           // The model wants to run a tool. We run it and return the result.
@@ -199,10 +230,10 @@ export function handleMediaStream(twilioWs) {
       },
     });
 
-    // Cost guardrail: close the call when the maximum duration is exceeded.
+    // Cost guardrail: at the maximum duration, say goodbye (with the reason) and hang up.
+    // The farewell has its own fallback timer, so the call can't outlive this by much.
     maxTimer = setTimeout(() => {
-      logger.warn(`[media] max duration (${config.maxCallSeconds}s) reached, closing`);
-      safeClose();
+      endWithFarewell('max_duration');
     }, config.maxCallSeconds * 1000);
 
     guard.start();
@@ -244,8 +275,13 @@ export function handleMediaStream(twilioWs) {
         break;
       }
       case 'media':
-        // Caller audio -> model (dropped until the AI session is up).
-        if (authorized) realtime?.sendAudio(msg.media.payload);
+        // Caller audio -> model. Dropped until the AI session is up, and during the
+        // farewell (so the caller can't interrupt it or trigger a new answer).
+        if (authorized && !farewell.isEnding()) realtime?.sendAudio(msg.media.payload);
+        break;
+      case 'mark':
+        // Twilio confirms that audio queued before one of our marks has finished playing.
+        farewell.onMark(msg.mark?.name);
         break;
       case 'stop':
         logger.info('[media] stream stopped by Twilio');
@@ -259,6 +295,7 @@ export function handleMediaStream(twilioWs) {
     closed = true;
     clearTimeout(startTimer);
     clearTimeout(maxTimer);
+    farewell.stop();
     guard?.stop();
     realtime?.close();
     if (counted) {
