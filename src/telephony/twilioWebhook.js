@@ -10,8 +10,8 @@
 // SECURITY (Phase 6):
 //   1. We validate the `X-Twilio-Signature`: if it is not a legitimate Twilio request,
 //      we respond 403 and do not emit TwiML.
-//   2. We embed a signed, expiring token in the <Stream> URL, which /media-stream
-//      verifies on open (so only Twilio can open the WebSocket).
+//   2. We pass a signed, expiring token as a <Parameter> of the <Stream>, which the
+//      media stream verifies on the `start` event before connecting to OpenAI.
 
 import twilio from 'twilio';
 import { config } from '../config/index.js';
@@ -51,14 +51,17 @@ export function handleIncomingCall(request, reply) {
     : request.headers.host;
 
   // 3) Authentication token for the WebSocket (null if protection is disabled).
+  // IMPORTANT: Twilio's <Stream> url does NOT support query strings, so the token travels
+  // as a Custom Parameter and arrives in the `start` event (start.customParameters.token),
+  // where mediaStream.js verifies it before connecting to OpenAI.
   const token = createStreamToken();
-  const streamUrl = `wss://${host}/media-stream${
-    token ? `?token=${encodeURIComponent(token)}` : ''
-  }`;
 
   const vr = new VoiceResponse();
   const connect = vr.connect();
-  const stream = connect.stream({ url: streamUrl });
+  const stream = connect.stream({ url: `wss://${host}/media-stream` });
+  if (token) {
+    stream.parameter({ name: 'token', value: token });
+  }
 
   // Pass the caller's number to the WebSocket: the Media Streams `start` event does not
   // include it, and we want it for the email summary (Phase 5).

@@ -13,7 +13,6 @@ import { config } from './config/index.js';
 import { logger } from './utils/logger.js';
 import { handleIncomingCall } from './telephony/twilioWebhook.js';
 import { handleMediaStream } from './telephony/mediaStream.js';
-import { verifyStreamToken } from './security/streamToken.js';
 
 const app = Fastify({ logger: false });
 
@@ -29,20 +28,11 @@ app.post('/incoming-call', handleIncomingCall);
 app.get('/incoming-call', handleIncomingCall);
 
 // WebSocket endpoint for real-time audio.
+// Authentication (Phase 6) happens inside handleMediaStream on the `start` event: Twilio's
+// <Stream> url does not support query strings, so the signed token arrives as a Custom
+// Parameter. Nothing is sent to OpenAI until it verifies.
 app.register(async (fastify) => {
-  fastify.get('/media-stream', { websocket: true }, (socket /* WebSocket */, req) => {
-    // Authentication (Phase 6): only Twilio knows the token we embed in the TwiML.
-    // We reject the connection BEFORE connecting to OpenAI so we don't burn tokens.
-    const result = verifyStreamToken(req.query?.token);
-    if (!result.valid) {
-      logger.warn(`[media] WebSocket connection rejected (token ${result.reason})`);
-      try {
-        socket.close(1008, 'unauthorized');
-      } catch {
-        /* noop */
-      }
-      return;
-    }
+  fastify.get('/media-stream', { websocket: true }, (socket /* WebSocket */) => {
     handleMediaStream(socket);
   });
 });
