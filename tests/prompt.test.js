@@ -21,6 +21,12 @@ describe('buildInstructions', () => {
     assert.match(p, /Only use information from the CV/i);
   });
 
+  test('requires European (Spain) Spanish when speaking Spanish', async () => {
+    const p = await buildInstructions();
+    assert.match(p, /European Spanish from Spain \(Castilian\)/);
+    assert.match(p, /Never switch to a Latin American accent/);
+  });
+
   test('embeds the CV content (source of truth)', async () => {
     const p = await buildInstructions();
     // The real CV contains the owner's name.
