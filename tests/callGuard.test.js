@@ -1,4 +1,4 @@
-// Tests for src/telephony/callGuard.js — silence and max caller turns.
+// Tests for src/telephony/callGuard.js — mutual-silence timeout and max caller turns.
 // Injected timers: no network, WebSocket or real waiting.
 
 import { test, describe, beforeEach } from 'node:test';
@@ -6,14 +6,13 @@ import assert from 'node:assert/strict';
 
 import { createCallGuard } from '../src/telephony/callGuard.js';
 
-// Controllable fake timer: stores the callback and lets us fire it by hand.
+// Controllable fake timer: stores the pending callback and lets us fire it by hand.
 function fakeTimers() {
   let pending = null;
-  let nextId = 1;
   return {
-    set: (fn, _ms) => {
+    set: (fn) => {
       pending = fn;
-      return nextId++;
+      return 1;
     },
     clear: () => {
       pending = null;
@@ -29,45 +28,88 @@ function fakeTimers() {
 
 describe('createCallGuard', () => {
   let timers;
+  let fired;
 
   beforeEach(() => {
     timers = fakeTimers();
+    fired = 0;
   });
 
   function makeGuard(overrides = {}) {
     return createCallGuard({
       silenceMs: 20000,
       maxCallerTurns: 3,
+      onSilence: () => (fired += 1),
       setTimer: timers.set,
       clearTimer: timers.clear,
       ...overrides,
     });
   }
 
-  test('start() arms the silence timer', () => {
+  test('start() arms the silence timer (nobody is speaking yet)', () => {
     const guard = makeGuard();
     guard.start();
     assert.equal(guard._state().armed, true);
   });
 
-  test('when the silence timeout elapses it calls onSilence', () => {
-    let fired = 0;
-    const guard = makeGuard({ onSilence: () => (fired += 1) });
+  test('when the timer elapses with both quiet, it calls onSilence', () => {
+    const guard = makeGuard();
     guard.start();
     timers.fire();
     assert.equal(fired, 1);
   });
 
-  test('activity() resets the timer (no silence fired while there is activity)', () => {
-    let fired = 0;
-    const guard = makeGuard({ onSilence: () => (fired += 1) });
+  test('regression: a long agent answer does not count as silence', () => {
+    // OpenAI streams a 20 s answer in ~2 s. The timer must stay off until Twilio
+    // confirms playback ended (agentDone), however long that takes.
+    const guard = makeGuard();
     guard.start();
-    guard.activity(); // resets: the previous timer was cleared
+    guard.agentAudio();
+    assert.equal(guard._state().armed, false);
+    assert.equal(timers.hasPending(), false);
+
+    guard.agentDone(); // playback finished
     assert.equal(guard._state().armed, true);
     assert.equal(fired, 0);
   });
 
-  test('countCallerTurn returns true and notifies when the maximum is exceeded', () => {
+  test('the timer stays off while the caller is speaking', () => {
+    const guard = makeGuard();
+    guard.start();
+    guard.callerSpeechStarted();
+    assert.equal(guard._state().armed, false);
+    guard.callerSpeechStopped();
+    assert.equal(guard._state().armed, true);
+  });
+
+  test('barge-in: the agent finishing while the caller talks does not arm it', () => {
+    const guard = makeGuard();
+    guard.start();
+    guard.agentAudio();
+    guard.callerSpeechStarted();
+    guard.agentDone(); // Twilio echoes the mark when we clear the buffer
+    assert.equal(guard._state().armed, false);
+    guard.callerSpeechStopped();
+    assert.equal(guard._state().armed, true);
+  });
+
+  test('each new quiet period restarts the countdown from zero', () => {
+    let arms = 0;
+    const guard = makeGuard({
+      setTimer: (fn) => {
+        arms += 1;
+        return timers.set(fn);
+      },
+    });
+    guard.start(); // 1
+    guard.agentAudio();
+    guard.agentDone(); // 2
+    guard.callerSpeechStarted();
+    guard.callerSpeechStopped(); // 3
+    assert.equal(arms, 3);
+  });
+
+  test('countCallerTurn returns true and notifies when the maximum is reached', () => {
     let maxed = 0;
     const guard = makeGuard({ onMaxTurns: () => (maxed += 1) });
     assert.equal(guard.countCallerTurn(), false); // 1
@@ -78,18 +120,20 @@ describe('createCallGuard', () => {
   });
 
   test('stop() cancels the timer and prevents later triggers', () => {
-    let fired = 0;
-    const guard = makeGuard({ onSilence: () => (fired += 1) });
+    const guard = makeGuard();
     guard.start();
     guard.stop();
     assert.equal(guard._state().armed, false);
-    timers.fire(); // even if something were there, stopped blocks it
+    guard.agentDone(); // must not re-arm after stop
+    assert.equal(guard._state().armed, false);
+    timers.fire();
     assert.equal(fired, 0);
   });
 
   test('silenceMs=0 disables the silence timeout', () => {
     const guard = makeGuard({ silenceMs: 0 });
     guard.start();
+    guard.agentDone();
     assert.equal(guard._state().armed, false);
   });
 

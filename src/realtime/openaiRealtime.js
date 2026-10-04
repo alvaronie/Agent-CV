@@ -108,6 +108,10 @@ export function connectRealtime({ instructions, tools = [], greeting, handlers =
         handlers.onSpeechStarted?.();
         break;
 
+      case 'input_audio_buffer.speech_stopped':
+        handlers.onSpeechStopped?.();
+        break;
+
       case 'conversation.item.input_audio_transcription.completed':
         if (event.transcript) handlers.onTranscript?.('caller', event.transcript);
         break;

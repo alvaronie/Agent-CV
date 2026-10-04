@@ -30,7 +30,7 @@ import { twilioClient } from './twilioClient.js';
 import { reportCall } from '../services/callReport.js';
 import { registerCallStart, registerCallEnd } from './callLimiter.js';
 import { createCallGuard } from './callGuard.js';
-import { createFarewell } from './farewell.js';
+import { createFarewell, FAREWELL_TAG } from './farewell.js';
 import { verifyStreamToken } from '../security/streamToken.js';
 import { config } from '../config/index.js';
 import { logger } from '../utils/logger.js';
@@ -69,6 +69,10 @@ export function handleMediaStream(twilioWs) {
   let realtime = null;
   let guard = null;
   let maxTimer = null;
+
+  // End-of-answer marks: only the latest one means "the agent has finished speaking".
+  let agentMarkSeq = 0;
+  let pendingAgentMark = null;
 
   function safeClose(code, reason) {
     try {
@@ -181,8 +185,10 @@ export function handleMediaStream(twilioWs) {
       greeting: GREETING,
       handlers: {
         onAudioDelta(base64) {
-          // Model voice -> Twilio (towards the caller).
-          guard.activity();
+          // Model voice -> Twilio (towards the caller). New audio means the agent is
+          // speaking again, so any earlier end-of-turn mark is no longer the last one.
+          guard.agentAudio();
+          pendingAgentMark = null;
           if (streamSid) {
             twilioWs.send(
               JSON.stringify({ event: 'media', streamSid, media: { payload: base64 } })
@@ -191,16 +197,20 @@ export function handleMediaStream(twilioWs) {
         },
         onSpeechStarted() {
           // The user interrupts: flush the audio queued in Twilio (barge-in).
-          guard.activity();
+          guard.callerSpeechStarted();
           if (streamSid) {
             twilioWs.send(JSON.stringify({ event: 'clear', streamSid }));
           }
         },
+        onSpeechStopped() {
+          guard.callerSpeechStopped();
+        },
         onTranscript(role, text) {
           // Subtitle of a turn (caller or agent). In memory only, and we do not dump it
-          // into the logs: it is third-party personal content.
+          // into the logs: it is third-party personal content. Transcripts arrive late
+          // and say nothing about who is speaking now, so they don't touch the silence
+          // timer; they only count caller turns.
           turns.push({ role, text });
-          guard.activity();
           if (role === 'caller') guard.countCallerTurn();
         },
         onClose() {
@@ -211,6 +221,18 @@ export function handleMediaStream(twilioWs) {
         },
         onResponseDone(response, tag) {
           farewell.onResponseDone(response, tag);
+          if (tag === FAREWELL_TAG) return; // the farewell places its own mark
+          // Mark the end of this answer's audio: Twilio echoes it once playback is done,
+          // and only then does the silence countdown start.
+          if (!streamSid) {
+            guard.agentDone();
+            return;
+          }
+          agentMarkSeq += 1;
+          pendingAgentMark = `agent-turn-${agentMarkSeq}`;
+          twilioWs.send(
+            JSON.stringify({ event: 'mark', streamSid, mark: { name: pendingAgentMark } })
+          );
         },
         async onFunctionCall(event) {
           // The model wants to run a tool. We run it and return the result.
@@ -282,6 +304,10 @@ export function handleMediaStream(twilioWs) {
       case 'mark':
         // Twilio confirms that audio queued before one of our marks has finished playing.
         farewell.onMark(msg.mark?.name);
+        if (pendingAgentMark && msg.mark?.name === pendingAgentMark) {
+          pendingAgentMark = null;
+          guard?.agentDone();
+        }
         break;
       case 'stop':
         logger.info('[media] stream stopped by Twilio');
