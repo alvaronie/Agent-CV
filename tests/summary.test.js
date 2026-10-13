@@ -9,7 +9,7 @@
 import { test, describe, beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { generateSummary, formatTranscript } from '../src/services/summary.js';
+import { generateSummary, formatTranscript, toPlainText } from '../src/services/summary.js';
 import { config } from '../src/config/index.js';
 
 const TURNS = [
@@ -97,5 +97,41 @@ describe('generateSummary', () => {
   test('throws if the API responds with a failure', async () => {
     stubFetch('rate limited', { ok: false, status: 429 });
     await assert.rejects(() => generateSummary(TURNS), /429/);
+  });
+
+  test('regression: "resumen" returned as an object of sections becomes text', async () => {
+    // Real production failure: "(parsed.resumen || "").trim is not a function".
+    stubFetch(
+      JSON.stringify({
+        asunto: 'Sara Nieto pide información',
+        resumen: {
+          'Quién llamó': 'Sara Nieto, Delegados Agrupados',
+          Motivo: 'Conocer la trayectoria de Álvaro',
+          'Puntos tratados': ['Trayectoria', 'Automatización de procesos'],
+        },
+      })
+    );
+    const { subject, body } = await generateSummary(TURNS);
+    assert.equal(subject, 'Sara Nieto pide información');
+    assert.match(body, /^Quién llamó: Sara Nieto, Delegados Agrupados$/m);
+    assert.match(body, /^Motivo: Conocer la trayectoria de Álvaro$/m);
+    assert.match(body, /Puntos tratados:\nTrayectoria\nAutomatización de procesos/);
+  });
+
+  test('a JSON value that is not an object is used as plain text', async () => {
+    stubFetch(JSON.stringify(['línea uno', 'línea dos']));
+    const { subject, body } = await generateSummary(TURNS);
+    assert.equal(subject, 'Llamada al agente de CV');
+    assert.equal(body, '["línea uno","línea dos"]');
+  });
+});
+
+describe('toPlainText', () => {
+  test('handles strings, numbers, arrays, nested objects and empty values', () => {
+    assert.equal(toPlainText('  hola  '), 'hola');
+    assert.equal(toPlainText(42), '42');
+    assert.equal(toPlainText(null), '');
+    assert.equal(toPlainText(['a', '', 'b']), 'a\nb');
+    assert.equal(toPlainText({ A: 'x', B: '', C: { D: 'y' } }), 'A: x\nC: D: y');
   });
 });

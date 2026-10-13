@@ -42,8 +42,10 @@ export const config = {
     apiKey: process.env.OPENAI_API_KEY || '',
     model: process.env.OPENAI_REALTIME_MODEL || 'gpt-realtime-mini',
     voice: process.env.OPENAI_VOICE || 'alloy',
-    // Model that transcribes the caller's audio (conversation subtitles).
-    transcribeModel: process.env.OPENAI_TRANSCRIBE_MODEL || 'whisper-1',
+    // Model that transcribes the caller's audio (conversation subtitles). whisper-1
+    // invents text on silence/noise (the classic phantom "Thank you."), so we use
+    // gpt-4o-mini-transcribe.
+    transcribeModel: process.env.OPENAI_TRANSCRIBE_MODEL || 'gpt-4o-mini-transcribe',
     // Text model that writes the summary when the call ends (Phase 5).
     summaryModel: process.env.OPENAI_SUMMARY_MODEL || 'gpt-4o-mini',
     // Reconnection attempts if the OpenAI WebSocket drops mid-call (Phase 6).

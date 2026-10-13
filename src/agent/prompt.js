@@ -77,7 +77,7 @@ export async function buildInstructions() {
     '- Wrap up and end the call politely once the caller has what they need or says goodbye.',
     '',
     '## Start of the call',
-    'Greet briefly, say you are Álvaro\'s voice assistant, mention the call may be recorded',
+    'Greet briefly, say you are Álvaro Nieto\'s voice assistant, mention the call may be recorded',
     'and transcribed to create a summary, let the caller know you can also speak other',
     'languages such as Spanish if they prefer, and ask how you can help.',
     '',

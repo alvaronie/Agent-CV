@@ -11,7 +11,7 @@
 //   OpenAI delta  ─▶ twilio { event:'media', ... }   (model voice -> call)
 //   barge-in      ─▶ twilio { event:'clear', ... }   (the user interrupts)
 //   function call ─▶ dispatchToolCall(...)           (tools: transfer/contact/end)
-//   transcript    ─▶ turns[]                         (subtitles, in memory only)
+//   transcript    ─▶ transcriptLog (conversation order, in memory only)
 //   limit reached ─▶ spoken farewell with the reason ─▶ Twilio mark ─▶ hang up
 //   on hangup     ─▶ summary (LLM) -> email -> record   (Phase 5)
 //
@@ -31,16 +31,18 @@ import { reportCall } from '../services/callReport.js';
 import { registerCallStart, registerCallEnd } from './callLimiter.js';
 import { createCallGuard } from './callGuard.js';
 import { createFarewell, FAREWELL_TAG } from './farewell.js';
+import { createTranscriptLog } from './transcriptLog.js';
 import { verifyStreamToken } from '../security/streamToken.js';
 import { config } from '../config/index.js';
 import { logger } from '../utils/logger.js';
 
-const GREETING =
-  'Greet in English, briefly and warmly. Introduce yourself as the CV owner\'s voice ' +
-  'assistant, and mention the call may be recorded and transcribed. Also let the caller ' +
-  'know you can continue in other languages, such as Spanish, if they prefer. Then ask ' +
-  'how you can help. Keep it to one or two short sentences. If the caller replies in ' +
-  'another language, switch to it for the rest of the call.';
+export const GREETING =
+  'Greet in English, briefly and warmly. Introduce yourself as Álvaro Nieto\'s voice ' +
+  'assistant (say his first name and first surname, "Álvaro Nieto"), and mention the ' +
+  'call may be recorded and transcribed. Also let the caller know you can continue in ' +
+  'other languages, such as Spanish, if they prefer. Then ask how you can help. Keep it ' +
+  'to one or two short sentences. If the caller replies in another language, switch to ' +
+  'it for the rest of the call.';
 
 // Margin (ms) before hanging up after end_call, so the already-emitted goodbye can play.
 const HANGUP_DELAY_MS = 2000;
@@ -59,10 +61,10 @@ export function handleMediaStream(twilioWs) {
   let authorized = false;
   let counted = false; // have we counted this call in the limiter?
 
-  // State for the summary (Phase 5). `turns` only exists in memory: see note D11.
+  // State for the summary (Phase 5). The transcript only exists in memory: see note D11.
   let callerNumber = '';
   let startedAt = null;
-  let turns = [];
+  const transcript = createTranscriptLog();
   let finalized = false;
 
   // Created only after the token verifies.
@@ -147,10 +149,10 @@ export function handleMediaStream(twilioWs) {
       ? Math.round((endedAt.getTime() - startedAt.getTime()) / 1000)
       : null;
 
-    // Take the turns and clear the state immediately: from here on the transcript only
-    // lives as an argument to reportCall.
-    const callTurns = turns;
-    turns = [];
+    // Take the turns (in conversation order) and clear the state immediately: from here
+    // on the transcript only lives as an argument to reportCall.
+    const callTurns = transcript.toTurns();
+    transcript.clear();
 
     await reportCall({
       turns: callTurns,
@@ -205,13 +207,18 @@ export function handleMediaStream(twilioWs) {
         onSpeechStopped() {
           guard.callerSpeechStopped();
         },
-        onTranscript(role, text) {
+        onItemOrder(itemId, role) {
+          // A conversation item was created: reserve its place so late transcripts land
+          // in the order people actually spoke.
+          transcript.reserve(itemId, role);
+        },
+        onTranscript(role, text, itemId) {
           // Subtitle of a turn (caller or agent). In memory only, and we do not dump it
           // into the logs: it is third-party personal content. Transcripts arrive late
           // and say nothing about who is speaking now, so they don't touch the silence
           // timer; they only count caller turns.
-          turns.push({ role, text });
-          if (role === 'caller') guard.countCallerTurn();
+          transcript.add(role, text, itemId);
+          if (role === 'caller' && text?.trim()) guard.countCallerTurn();
         },
         onClose() {
           // OpenAI dropped and retries were exhausted: close the call so we don't leave

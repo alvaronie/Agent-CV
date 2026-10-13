@@ -28,11 +28,12 @@ const SYSTEM_PROMPT = `Eres un asistente que resume llamadas telefónicas recibi
 agente de voz del CV de Álvaro. Escribe SIEMPRE en español, aunque la llamada haya sido en
 otro idioma.
 
-Devuelve un JSON con dos campos:
+Devuelve un JSON con dos campos, y los dos deben ser cadenas de texto (string), nunca
+objetos ni listas:
 - "asunto": una línea de menos de 70 caracteres que identifique la llamada (quién llamó y
   para qué). Sin comillas ni prefijos.
-- "resumen": el cuerpo del email, en texto plano con estas secciones, omitiendo las que no
-  apliquen:
+- "resumen": el cuerpo del email, en texto plano dentro de UNA sola cadena, con estas
+  secciones (una por línea, separadas con \\n), omitiendo las que no apliquen:
   Quién llamó: nombre, empresa y cargo si se mencionaron.
   Motivo: qué buscaba.
   Puntos tratados: lista breve de lo que se preguntó y lo que se respondió.
@@ -42,6 +43,30 @@ Devuelve un JSON con dos campos:
 Sé breve y concreto. No inventes nada: si un dato no aparece en la conversación, di que no
 se facilitó. Si la llamada no tuvo contenido real (silencio, error, colgaron al momento),
 dilo en una línea y no rellenes secciones.`;
+
+/**
+ * Flattens whatever the model put in a JSON field into plain text. Despite the
+ * instructions, the model sometimes returns "resumen" as an object of sections (or an
+ * array) instead of a string; calling .trim() on that crashed the summary in production.
+ * @param {unknown} value
+ * @returns {string}
+ */
+export function toPlainText(value) {
+  if (value == null) return '';
+  if (typeof value === 'string') return value.trim();
+  if (Array.isArray(value)) return value.map(toPlainText).filter(Boolean).join('\n');
+  if (typeof value === 'object') {
+    return Object.entries(value)
+      .map(([key, v]) => {
+        const text = toPlainText(v);
+        if (!text) return '';
+        return text.includes('\n') ? `${key}:\n${text}` : `${key}: ${text}`;
+      })
+      .filter(Boolean)
+      .join('\n');
+  }
+  return String(value).trim();
+}
 
 /**
  * Turns the accumulated turns into readable text for the model.
@@ -122,13 +147,16 @@ export async function generateSummary(turns, meta = {}) {
   try {
     parsed = JSON.parse(raw);
   } catch {
-    // The model did not return valid JSON: use its text as-is for the body.
-    logger.warn('[summary] response was not valid JSON, using it as plain text');
+    parsed = null;
+  }
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    // The model did not return a JSON object: use its text as-is for the body.
+    logger.warn('[summary] response was not a JSON object, using it as plain text');
     parsed = { asunto: '', resumen: raw };
   }
 
-  const subject = (parsed.asunto || '').trim() || 'Llamada al agente de CV';
-  const body = (parsed.resumen || '').trim() || raw.trim();
+  const subject = toPlainText(parsed.asunto) || 'Llamada al agente de CV';
+  const body = toPlainText(parsed.resumen) || raw.trim();
 
   logger.info(`[summary] summary generated (${body.length} chars)`);
   return { subject, body };

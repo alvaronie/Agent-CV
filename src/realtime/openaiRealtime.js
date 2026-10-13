@@ -49,6 +49,9 @@ export function connectRealtime({ instructions, tools = [], greeting, handlers =
           input: {
             format: { type: 'audio/pcmu' },
             turn_detection: { type: 'server_vad' },
+            // Phone handset = close-talking mic. Filters background noise before VAD and
+            // transcription, which cuts phantom turns triggered by noise.
+            noise_reduction: { type: 'near_field' },
             // Subtitles of the caller's audio. Without this there is no way to know what
             // they said: the model is speech-to-speech and returns no text on the input
             // side. Needed for the Phase 5 summary.
@@ -112,14 +115,26 @@ export function connectRealtime({ instructions, tools = [], greeting, handlers =
         handlers.onSpeechStopped?.();
         break;
 
+      case 'input_audio_buffer.committed':
+        // A caller turn has been committed: this fixes its place in the conversation.
+        if (event.item_id) handlers.onItemOrder?.(event.item_id, 'caller');
+        break;
+
+      case 'response.output_item.added':
+        // An agent turn starts: this fixes its place in the conversation.
+        if (event.item?.type === 'message' && event.item.id) {
+          handlers.onItemOrder?.(event.item.id, 'agent');
+        }
+        break;
+
       case 'conversation.item.input_audio_transcription.completed':
-        if (event.transcript) handlers.onTranscript?.('caller', event.transcript);
+        if (event.transcript) handlers.onTranscript?.('caller', event.transcript, event.item_id);
         break;
 
       // The agent transcription event name changed between beta and GA.
       case 'response.output_audio_transcript.done':
       case 'response.audio_transcript.done':
-        if (event.transcript) handlers.onTranscript?.('agent', event.transcript);
+        if (event.transcript) handlers.onTranscript?.('agent', event.transcript, event.item_id);
         break;
 
       case 'response.function_call_arguments.done':

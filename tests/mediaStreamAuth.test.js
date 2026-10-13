@@ -8,7 +8,7 @@ import { test, describe, beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
 
-import { handleMediaStream } from '../src/telephony/mediaStream.js';
+import { handleMediaStream, GREETING } from '../src/telephony/mediaStream.js';
 import { _reset, _snapshot } from '../src/telephony/callLimiter.js';
 import { config } from '../src/config/index.js';
 
@@ -78,5 +78,12 @@ describe('mediaStream auth gate', () => {
     ws.emit('message', Buffer.from(JSON.stringify({ event: 'media', media: { payload: 'AA==' } })));
     assert.equal(ws.sent.length, 0);
     ws.close(); // clean up the start timer
+  });
+});
+
+describe('GREETING', () => {
+  test('introduces the assistant with first name and first surname', () => {
+    assert.match(GREETING, /Álvaro Nieto's voice assistant/);
+    assert.doesNotMatch(GREETING, /Balmori/);
   });
 });

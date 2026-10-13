@@ -38,7 +38,7 @@ services:
       - key: OPENAI_VOICE
         value: alloy
       - key: OPENAI_TRANSCRIBE_MODEL
-        value: whisper-1
+        value: gpt-4o-mini-transcribe   # whisper-1 hallucinates "Thank you." on silence
       - key: OPENAI_SUMMARY_MODEL
         value: gpt-4o-mini
       - key: EMAIL_PROVIDER
