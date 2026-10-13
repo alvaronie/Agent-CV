@@ -52,6 +52,20 @@ export const config = {
     reconnectMaxAttempts: numEnv('OPENAI_RECONNECT_MAX_ATTEMPTS', 3),
   },
 
+  // Who produces the agent's voice:
+  //   'openai'     -> OpenAI Realtime speech-to-speech (default, what has been tested).
+  //   'elevenlabs' -> OpenAI Realtime replies in TEXT and ElevenLabs speaks it.
+  // With 'elevenlabs' but no key or voice id, the code falls back to 'openai'.
+  voiceProvider:
+    (process.env.VOICE_PROVIDER || 'openai').toLowerCase() === 'elevenlabs' ? 'elevenlabs' : 'openai',
+
+  elevenlabs: {
+    apiKey: process.env.ELEVENLABS_API_KEY || '',
+    voiceId: process.env.ELEVENLABS_VOICE_ID || '',
+    // Flash: ElevenLabs' lowest-latency multilingual model, meant for real-time agents.
+    modelId: process.env.ELEVENLABS_MODEL_ID || 'eleven_flash_v2_5',
+  },
+
   twilio: {
     accountSid: process.env.TWILIO_ACCOUNT_SID || '',
     authToken: process.env.TWILIO_AUTH_TOKEN || '',

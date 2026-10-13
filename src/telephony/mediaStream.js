@@ -9,6 +9,7 @@
 //   start event   ─▶ verify token, then connect to OpenAI   (auth gate, Phase 6)
 //   Twilio media  ─▶ realtime.sendAudio()            (caller audio -> model)
 //   OpenAI delta  ─▶ twilio { event:'media', ... }   (model voice -> call)
+//   OpenAI text   ─▶ ElevenLabs ─▶ twilio media      (VOICE_PROVIDER=elevenlabs)
 //   barge-in      ─▶ twilio { event:'clear', ... }   (the user interrupts)
 //   function call ─▶ dispatchToolCall(...)           (tools: transfer/contact/end)
 //   transcript    ─▶ session transcript (conversation order, in memory only)
@@ -37,6 +38,8 @@ import { callSessions } from './callSessions.js';
 import { isCallableNumber } from './callerNumber.js';
 import { createCallGuard } from './callGuard.js';
 import { createFarewell, FAREWELL_TAG } from './farewell.js';
+import { createLatencyMeter } from './latencyMeter.js';
+import { createElevenLabsTts } from '../voice/elevenLabsTts.js';
 import { verifyStreamToken } from '../security/streamToken.js';
 import { config } from '../config/index.js';
 import { logger } from '../utils/logger.js';
@@ -105,6 +108,13 @@ export function buildResumeContext(turns, { callerNumberKnown }) {
   ].join('\n');
 }
 
+/** Whether the ElevenLabs voice is selected AND configured (otherwise OpenAI's voice). */
+export function isElevenLabsEnabled(cfg = config) {
+  return (
+    cfg.voiceProvider === 'elevenlabs' && Boolean(cfg.elevenlabs.apiKey && cfg.elevenlabs.voiceId)
+  );
+}
+
 // Margin (ms) before hanging up after end_call, so the already-emitted goodbye can play.
 const HANGUP_DELAY_MS = 2000;
 
@@ -138,6 +148,57 @@ export function handleMediaStream(twilioWs, { sessions = callSessions } = {}) {
   // End-of-answer marks: only the latest one means "the agent has finished speaking".
   let agentMarkSeq = 0;
   let pendingAgentMark = null;
+
+  // Voice: OpenAI speech-to-speech, or OpenAI text + ElevenLabs voice.
+  const useTts = isElevenLabsEnabled();
+  let tts = null;
+  // ElevenLabs mode: response.done arrives before its audio is generated, so the "answer
+  // finished" handling waits for the utterance to be done.
+  const deferredDone = new Map();
+  const latency = createLatencyMeter();
+
+  // Agent audio towards the caller, whichever engine produced it.
+  function playAgentAudio(base64) {
+    guard?.agentAudio();
+    pendingAgentMark = null;
+    const sample = latency.firstAudio();
+    if (sample) {
+      logger.info(
+        `[latency] voice=${useTts ? 'elevenlabs' : 'openai'} first_audio_ms=${sample.audioMs}` +
+          (sample.textMs === null ? '' : ` first_text_ms=${sample.textMs}`)
+      );
+    }
+    if (streamSid) {
+      twilioWs.send(JSON.stringify({ event: 'media', streamSid, media: { payload: base64 } }));
+    }
+  }
+
+  // One agent answer has been fully queued to Twilio: hand it to the farewell, or place an
+  // end-of-answer mark (Twilio echoes it once playback is done; only then does the
+  // silence countdown start).
+  function answerFinished(response, tag) {
+    farewell.onResponseDone(response, tag);
+    if (tag === FAREWELL_TAG) return; // the farewell places its own mark
+    if (!streamSid) {
+      guard?.agentDone();
+      return;
+    }
+    agentMarkSeq += 1;
+    pendingAgentMark = `agent-turn-${agentMarkSeq}`;
+    twilioWs.send(
+      JSON.stringify({ event: 'mark', streamSid, mark: { name: pendingAgentMark } })
+    );
+  }
+
+  // Stops the ElevenLabs voice (barge-in, farewell). Its cancelled answers never produce
+  // a mark, so the agent is marked as no longer speaking here.
+  function stopTtsSpeech() {
+    if (!tts) return;
+    tts.cancel();
+    deferredDone.clear();
+    pendingAgentMark = null;
+    guard?.agentDone();
+  }
 
   function safeClose(code, reason) {
     try {
@@ -194,7 +255,11 @@ export function handleMediaStream(twilioWs, { sessions = callSessions } = {}) {
   });
 
   function endWithFarewell(reason) {
-    if (closing || !farewell.begin(reason)) return;
+    if (closing) return;
+    // Silence whatever the ElevenLabs voice was still saying before the goodbye.
+    stopTtsSpeech();
+    latency.reset();
+    if (!farewell.begin(reason)) return;
     logger.warn(`[media] limit reached (${reason}); saying goodbye before hanging up`);
     guard?.stop();
     clearTimeout(maxTimer);
@@ -223,33 +288,52 @@ export function handleMediaStream(twilioWs, { sessions = callSessions } = {}) {
       },
     });
 
+    // ElevenLabs voice: OpenAI replies in text and this turns it into speech.
+    if (useTts) {
+      tts = createElevenLabsTts({
+        apiKey: config.elevenlabs.apiKey,
+        voiceId: config.elevenlabs.voiceId,
+        modelId: config.elevenlabs.modelId,
+        onAudio: (base64) => playAgentAudio(base64),
+        onUtteranceDone: (responseId) => {
+          const deferred = deferredDone.get(responseId);
+          deferredDone.delete(responseId);
+          if (deferred) answerFinished(deferred.response, deferred.tag);
+        },
+      });
+      tts.connect(); // open early so the greeting doesn't pay the handshake
+    }
+
     realtime = connectRealtime({
       instructions,
       tools: toolDefinitions,
+      outputMode: useTts ? 'text' : 'audio',
       greeting: resumed
         ? buildResumeGreeting({ language: resumeLang, callerNumberKnown })
         : GREETING,
       handlers: {
         onAudioDelta(base64) {
-          // Model voice -> Twilio (towards the caller). New audio means the agent is
-          // speaking again, so any earlier end-of-turn mark is no longer the last one.
-          guard.agentAudio();
-          pendingAgentMark = null;
-          if (streamSid) {
-            twilioWs.send(
-              JSON.stringify({ event: 'media', streamSid, media: { payload: base64 } })
-            );
-          }
+          // OpenAI voice -> Twilio (towards the caller).
+          playAgentAudio(base64);
+        },
+        onTextDelta(delta, responseId) {
+          // ElevenLabs mode: OpenAI's text goes to ElevenLabs, sentence by sentence.
+          if (!tts || !responseId) return;
+          latency.firstText();
+          tts.append(responseId, delta);
         },
         onSpeechStarted() {
           // The user interrupts: flush the audio queued in Twilio (barge-in).
           guard.callerSpeechStarted();
+          latency.reset();
           if (streamSid) {
             twilioWs.send(JSON.stringify({ event: 'clear', streamSid }));
           }
+          stopTtsSpeech();
         },
         onSpeechStopped() {
           guard.callerSpeechStopped();
+          latency.callerStopped();
         },
         onItemOrder(itemId, role) {
           // A conversation item was created: reserve its place so late transcripts land
@@ -274,19 +358,13 @@ export function handleMediaStream(twilioWs, { sessions = callSessions } = {}) {
           safeClose();
         },
         onResponseDone(response, tag) {
-          farewell.onResponseDone(response, tag);
-          if (tag === FAREWELL_TAG) return; // the farewell places its own mark
-          // Mark the end of this answer's audio: Twilio echoes it once playback is done,
-          // and only then does the silence countdown start.
-          if (!streamSid) {
-            guard.agentDone();
+          // ElevenLabs mode: the audio of this answer is still being generated, so wait
+          // for it before marking the end of the answer.
+          if (tts?.end(response?.id)) {
+            deferredDone.set(response.id, { response, tag });
             return;
           }
-          agentMarkSeq += 1;
-          pendingAgentMark = `agent-turn-${agentMarkSeq}`;
-          twilioWs.send(
-            JSON.stringify({ event: 'mark', streamSid, mark: { name: pendingAgentMark } })
-          );
+          answerFinished(response, tag);
         },
         async onFunctionCall(event) {
           // The model wants to run a tool. We run it and return the result.
@@ -392,6 +470,14 @@ export function handleMediaStream(twilioWs, { sessions = callSessions } = {}) {
     farewell.stop();
     guard?.stop();
     realtime?.close();
+    tts?.close();
+    const lat = latency.summary();
+    if (lat) {
+      logger.info(
+        `[latency] voice=${useTts ? 'elevenlabs' : 'openai'} answers=${lat.answers} ` +
+          `avg_ms=${lat.avgMs} median_ms=${lat.medianMs} min_ms=${lat.minMs} max_ms=${lat.maxMs}`
+      );
+    }
     logger.info('[media] Twilio connection closed');
 
     // Unauthorized connections are not calls: nothing to summarize or record.

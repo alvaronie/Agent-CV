@@ -12,6 +12,9 @@
 //  - Model output audio: response.output_audio.delta event (base64).
 //  - Interruption (barge-in): input_audio_buffer.speech_started.
 //
+// TEXT MODE (VOICE_PROVIDER=elevenlabs): output_modalities ["text"]; the model replies
+// with response.output_text.delta events, which the bridge sends to ElevenLabs.
+//
 // ROBUSTNESS (Phase 6): if the WebSocket drops unexpectedly mid-call, we retry the
 // connection with backoff (see reconnectPolicy.js). On reconnect the session is
 // reconfigured (instructions + tools), but the greeting is NOT replayed. If retries are
@@ -27,7 +30,47 @@ import { nextReconnect } from './reconnectPolicy.js';
 
 const REALTIME_URL = `wss://api.openai.com/v1/realtime?model=${encodeURIComponent(config.openai.model)}`;
 
-export function connectRealtime({ instructions, tools = [], greeting, handlers = {} }) {
+/**
+ * session.update payload. Pure function (unit tested).
+ * outputMode 'audio': speech-to-speech, OpenAI speaks (default).
+ * outputMode 'text' : OpenAI only replies in text, which ElevenLabs then speaks.
+ */
+export function buildSessionUpdate({
+  instructions,
+  tools = [],
+  outputMode = 'audio',
+  voice = config.openai.voice,
+  transcribeModel = config.openai.transcribeModel,
+}) {
+  const input = {
+    format: { type: 'audio/pcmu' },
+    turn_detection: { type: 'server_vad' },
+    // Phone handset = close-talking mic. Filters background noise before VAD and
+    // transcription, which cuts phantom turns triggered by noise.
+    noise_reduction: { type: 'near_field' },
+    // Subtitles of the caller's audio. Without this there is no way to know what they
+    // said: the model returns no text on the input side. Needed for the Phase 5 summary.
+    transcription: { model: transcribeModel },
+  };
+  const session =
+    outputMode === 'text'
+      ? { type: 'realtime', instructions, output_modalities: ['text'], audio: { input } }
+      : {
+          type: 'realtime',
+          instructions,
+          audio: { input, output: { format: { type: 'audio/pcmu' }, voice } },
+        };
+  if (tools.length) Object.assign(session, { tools, tool_choice: 'auto' });
+  return { type: 'session.update', session };
+}
+
+export function connectRealtime({
+  instructions,
+  tools = [],
+  greeting,
+  outputMode = 'audio',
+  handlers = {},
+}) {
   let ws = null;
   let intentionalClose = false;
   let hasGreeted = false;
@@ -39,40 +82,12 @@ export function connectRealtime({ instructions, tools = [], greeting, handlers =
   let pendingTag = null;
   const taggedResponses = new Map();
 
-  function buildSessionUpdate() {
-    return {
-      type: 'session.update',
-      session: {
-        type: 'realtime',
-        instructions,
-        audio: {
-          input: {
-            format: { type: 'audio/pcmu' },
-            turn_detection: { type: 'server_vad' },
-            // Phone handset = close-talking mic. Filters background noise before VAD and
-            // transcription, which cuts phantom turns triggered by noise.
-            noise_reduction: { type: 'near_field' },
-            // Subtitles of the caller's audio. Without this there is no way to know what
-            // they said: the model is speech-to-speech and returns no text on the input
-            // side. Needed for the Phase 5 summary.
-            transcription: { model: config.openai.transcribeModel },
-          },
-          output: {
-            format: { type: 'audio/pcmu' },
-            voice: config.openai.voice,
-          },
-        },
-        ...(tools.length ? { tools, tool_choice: 'auto' } : {}),
-      },
-    };
-  }
-
   function handleEvent(event) {
     switch (event.type) {
       case 'session.created':
         // Connection established: reset the retry counter and configure the session.
         reconnectAttempts = 0;
-        ws.send(JSON.stringify(buildSessionUpdate()));
+        ws.send(JSON.stringify(buildSessionUpdate({ instructions, tools, outputMode })));
         break;
 
       case 'session.updated':
@@ -105,6 +120,17 @@ export function connectRealtime({ instructions, tools = [], greeting, handlers =
 
       case 'response.output_audio.delta':
         handlers.onAudioDelta?.(event.delta);
+        break;
+
+      // Text mode (VOICE_PROVIDER=elevenlabs). Names differ between beta and GA.
+      case 'response.output_text.delta':
+      case 'response.text.delta':
+        if (event.delta) handlers.onTextDelta?.(event.delta, event.response_id);
+        break;
+
+      case 'response.output_text.done':
+      case 'response.text.done':
+        if (event.text) handlers.onTranscript?.('agent', event.text, event.item_id);
         break;
 
       case 'input_audio_buffer.speech_started':

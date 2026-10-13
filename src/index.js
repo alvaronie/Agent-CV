@@ -14,7 +14,7 @@ import { config } from './config/index.js';
 import { logger } from './utils/logger.js';
 import { handleIncomingCall } from './telephony/twilioWebhook.js';
 import { handleTransferStatus } from './telephony/transferStatus.js';
-import { handleMediaStream } from './telephony/mediaStream.js';
+import { handleMediaStream, isElevenLabsEnabled } from './telephony/mediaStream.js';
 
 const app = Fastify({ logger: false });
 
@@ -49,6 +49,12 @@ try {
   if (!config.security.streamTokenSecret) {
     logger.warn('[security] STREAM_TOKEN_SECRET empty: /media-stream NOT authenticated (dev only)');
   }
+  if (config.voiceProvider === 'elevenlabs' && !isElevenLabsEnabled()) {
+    logger.warn(
+      '[voice] VOICE_PROVIDER=elevenlabs but ELEVENLABS_API_KEY/ELEVENLABS_VOICE_ID missing; using OpenAI voice'
+    );
+  }
+  logger.info(`[voice] agent voice: ${isElevenLabsEnabled() ? 'elevenlabs' : 'openai'}`);
   await app.listen({ port: config.port, host: config.host });
   logger.info(`Agent CV listening on http://${config.host}:${config.port}`);
   logger.info('  - Health:  GET  /health');

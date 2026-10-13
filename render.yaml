@@ -63,3 +63,10 @@ services:
         sync: false
       - key: EMAIL_TO
         sync: false
+      # --- Agent voice (dashboard-owned so switching doesn't need a push) ---
+      - key: VOICE_PROVIDER          # openai (default if empty) | elevenlabs
+        sync: false
+      - key: ELEVENLABS_API_KEY
+        sync: false
+      - key: ELEVENLABS_VOICE_ID
+        sync: false
