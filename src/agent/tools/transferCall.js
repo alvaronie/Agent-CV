@@ -4,6 +4,11 @@
 // callSid) with TwiML <Dial> to the personal number. Doing so, Twilio ends the current
 // <Connect><Stream> and dials the phone; our audio bridge closes on its own when Twilio
 // closes the Media Streams WebSocket.
+//
+// If the transfer fails (blocked by geo permissions, no answer, busy...), <Dial> calls
+// its `action` URL (/transfer-status) with the outcome; that route apologizes in the
+// conversation language and hangs up. Without an action URL Twilio would simply end the
+// call silently, which is what callers experienced before.
 
 import twilio from 'twilio';
 import { twilioClient } from '../../telephony/twilioClient.js';
@@ -11,6 +16,29 @@ import { config } from '../../config/index.js';
 import { logger } from '../../utils/logger.js';
 
 const VoiceResponse = twilio.twiml.VoiceResponse;
+
+// Seconds to let the personal phone ring before giving up.
+const DIAL_TIMEOUT_SECONDS = 25;
+
+/**
+ * Builds the transfer TwiML. Pure function (no network), so it can be unit tested.
+ * @param {{personalNumber:string, callerId?:string, publicUrl?:string, language?:string}} opts
+ * @returns {string}
+ */
+export function buildTransferTwiml({ personalNumber, callerId, publicUrl, language }) {
+  const lang = language === 'es' ? 'es' : 'en';
+  const vr = new VoiceResponse();
+  const dialOpts = { callerId: callerId || undefined, timeout: DIAL_TIMEOUT_SECONDS };
+  // The action URL must be absolute: TwiML pushed via the REST API has no document URL
+  // that a relative one could resolve against.
+  if (publicUrl) {
+    dialOpts.action = `${publicUrl.replace(/\/$/, '')}/transfer-status?lang=${lang}`;
+    dialOpts.method = 'POST';
+  }
+  const dial = vr.dial(dialOpts);
+  dial.number(personalNumber);
+  return vr.toString();
+}
 
 export const transferCallTool = {
   definition: {
@@ -27,6 +55,13 @@ export const transferCallTool = {
           type: 'string',
           description: 'Short reason for the transfer, for logging.',
         },
+        language: {
+          type: 'string',
+          enum: ['en', 'es'],
+          description:
+            'Language you are speaking with the caller, used if the transfer fails and ' +
+            'they need to be told Álvaro could not be reached.',
+        },
       },
       required: [],
     },
@@ -40,11 +75,14 @@ export const transferCallTool = {
     if (!ctx?.callSid) return 'Transfer unavailable: missing the current call reference.';
 
     try {
-      const vr = new VoiceResponse();
-      const dial = vr.dial({ callerId: config.twilio.phoneNumber || undefined });
-      dial.number(config.twilio.myPersonalNumber);
+      const twiml = buildTransferTwiml({
+        personalNumber: config.twilio.myPersonalNumber,
+        callerId: config.twilio.phoneNumber,
+        publicUrl: config.publicUrl,
+        language: args?.language,
+      });
 
-      await twilioClient.calls(ctx.callSid).update({ twiml: vr.toString() });
+      await twilioClient.calls(ctx.callSid).update({ twiml });
       logger.info(
         `[tool:transfer_call] ${ctx.callSid} -> mobile (reason: ${args?.reason ?? 'n/a'})`
       );

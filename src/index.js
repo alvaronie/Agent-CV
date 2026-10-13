@@ -3,6 +3,7 @@
 // Routes:
 //  - GET  /health           -> health check.
 //  - POST|GET /incoming-call -> Twilio webhook (returns TwiML <Connect><Stream>).
+//  - POST /transfer-status   -> transfer <Dial> outcome (apology if it didn't connect).
 //  - WS   /media-stream      -> real-time audio (Twilio Media Streams <-> OpenAI).
 
 import Fastify from 'fastify';
@@ -12,6 +13,7 @@ import websocket from '@fastify/websocket';
 import { config } from './config/index.js';
 import { logger } from './utils/logger.js';
 import { handleIncomingCall } from './telephony/twilioWebhook.js';
+import { handleTransferStatus } from './telephony/transferStatus.js';
 import { handleMediaStream } from './telephony/mediaStream.js';
 
 const app = Fastify({ logger: false });
@@ -26,6 +28,9 @@ app.get('/health', async () => ({ status: 'ok', service: 'agent-cv' }));
 // Incoming-call webhook (Twilio uses POST; we accept GET for manual testing).
 app.post('/incoming-call', handleIncomingCall);
 app.get('/incoming-call', handleIncomingCall);
+
+// Transfer outcome callback (<Dial action>): apologizes if the transfer did not connect.
+app.post('/transfer-status', handleTransferStatus);
 
 // WebSocket endpoint for real-time audio.
 // Authentication (Phase 6) happens inside handleMediaStream on the `start` event: Twilio's
