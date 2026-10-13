@@ -11,9 +11,15 @@
 //   OpenAI delta  ─▶ twilio { event:'media', ... }   (model voice -> call)
 //   barge-in      ─▶ twilio { event:'clear', ... }   (the user interrupts)
 //   function call ─▶ dispatchToolCall(...)           (tools: transfer/contact/end)
-//   transcript    ─▶ transcriptLog (conversation order, in memory only)
+//   transcript    ─▶ session transcript (conversation order, in memory only)
 //   limit reached ─▶ spoken farewell with the reason ─▶ Twilio mark ─▶ hang up
-//   on hangup     ─▶ summary (LLM) -> email -> record   (Phase 5)
+//   call over     ─▶ summary (LLM) -> email -> record   (Phase 5, once per call)
+//
+// One call can span several stream "legs": a transfer replaces the stream with a <Dial>,
+// and if Álvaro doesn't pick up, /transfer-status reconnects a new stream (`resume`).
+// Per-call state lives in callSessions (keyed by callSid), so the resumed leg keeps the
+// transcript, the limiter slot and the call clock, and the agent is given what was said
+// so far (a new OpenAI session starts with no memory).
 //
 // AUTH (Phase 6): Twilio's <Stream> url does not support query strings, so the signed
 // token arrives as a Custom Parameter in the `start` event. Nothing is sent to OpenAI
@@ -27,11 +33,10 @@ import { connectRealtime } from '../realtime/openaiRealtime.js';
 import { buildInstructions } from '../agent/prompt.js';
 import { toolDefinitions, dispatchToolCall } from '../agent/tools/index.js';
 import { twilioClient } from './twilioClient.js';
-import { reportCall } from '../services/callReport.js';
-import { registerCallStart, registerCallEnd } from './callLimiter.js';
+import { callSessions } from './callSessions.js';
+import { isCallableNumber } from './callerNumber.js';
 import { createCallGuard } from './callGuard.js';
 import { createFarewell, FAREWELL_TAG } from './farewell.js';
-import { createTranscriptLog } from './transcriptLog.js';
 import { verifyStreamToken } from '../security/streamToken.js';
 import { config } from '../config/index.js';
 import { logger } from '../utils/logger.js';
@@ -44,6 +49,62 @@ export const GREETING =
   'to one or two short sentences. If the caller replies in another language, switch to ' +
   'it for the rest of the call.';
 
+/**
+ * What the agent says when the call comes back after Álvaro didn't pick up. These are
+ * response-level instructions (they replace the session instructions for this reply),
+ * so they restate the persona and the language.
+ * @param {{language?:string, callerNumberKnown:boolean}} opts
+ */
+export function buildResumeGreeting({ language, callerNumberKnown }) {
+  const lang =
+    language === 'es'
+      ? 'Speak in European Spanish from Spain (Castilian accent and vocabulary).'
+      : 'Speak in English, unless the caller had been speaking another language.';
+  const callback = callerNumberKnown
+    ? 'Then ask whether they would like Álvaro to call them back on the same number they ' +
+      'are calling from.'
+    : 'Their number is not available, so ask for a phone number or an email address so ' +
+      'Álvaro can get back to them.';
+  return (
+    "You are Álvaro Nieto's voice assistant. You just tried to transfer this call to " +
+    'Álvaro, but he could not be reached right now. Tell the caller that you could not ' +
+    'reach Álvaro at the moment, and that you will let him know by email what you talked ' +
+    `about. ${callback} ${lang} Keep it to two or three short sentences. Do not greet ` +
+    'again, do not read out any phone number, and do not call any tools in this reply.'
+  );
+}
+
+const HISTORY_MAX_CHARS = 12000;
+
+/** Session-instruction addendum for a resumed leg: what happened before the transfer. */
+export function buildResumeContext(turns, { callerNumberKnown }) {
+  const lines = turns
+    .map((t) => {
+      const who = t.role === 'caller' ? 'Caller' : t.role === 'event' ? 'Event' : 'Agent';
+      return `${who}: ${t.text}`;
+    })
+    .join('\n');
+  const history = lines.length > HISTORY_MAX_CHARS ? lines.slice(-HISTORY_MAX_CHARS) : lines;
+  const callback = callerNumberKnown
+    ? '- If they want a callback on the number they are calling from, call save_contact ' +
+      'with use_caller_number=true (do not ask for the number or read it out). If they ' +
+      'prefer another phone or an email, take it, read it back and save it.'
+    : '- Their number is not available: ask for a phone or email, read it back and save it ' +
+      'with save_contact.';
+  return [
+    '',
+    '## This call so far (it resumed after a transfer attempt)',
+    'You tried to transfer the call to Álvaro and he did not pick up; you have just told',
+    'the caller. Continue the conversation in the same language used so far. Do not greet',
+    'again and do not try to transfer again unless the caller explicitly insists.',
+    callback,
+    '- Then ask whether there is anything else you can help with.',
+    '',
+    'Conversation before the transfer:',
+    history || '(no transcript available)',
+  ].join('\n');
+}
+
 // Margin (ms) before hanging up after end_call, so the already-emitted goodbye can play.
 const HANGUP_DELAY_MS = 2000;
 
@@ -53,19 +114,21 @@ const START_TIMEOUT_MS = 5000;
 // Max time (ms) for the limit-triggered farewell to play before hanging up anyway.
 const FAREWELL_TIMEOUT_MS = 15000;
 
-export function handleMediaStream(twilioWs) {
+// Minimum time (ms) a resumed leg gets, so a call that resumes near its time limit can
+// still deliver the "couldn't reach Álvaro" message and the farewell.
+const MIN_RESUMED_LEG_MS = 30000;
+
+export function handleMediaStream(twilioWs, { sessions = callSessions } = {}) {
   let streamSid = null;
   let callSid = null;
   let closing = false;
   let closed = false;
   let authorized = false;
-  let counted = false; // have we counted this call in the limiter?
 
-  // State for the summary (Phase 5). The transcript only exists in memory: see note D11.
-  let callerNumber = '';
-  let startedAt = null;
-  const transcript = createTranscriptLog();
-  let finalized = false;
+  // Per-call state (transcript, caller number, start time): shared across legs.
+  let session = null;
+  let resumed = false;
+  let resumeLang = 'en';
 
   // Created only after the token verifies.
   let realtime = null;
@@ -137,42 +200,21 @@ export function handleMediaStream(twilioWs) {
     clearTimeout(maxTimer);
   }
 
-  // Business-level call teardown: summarize, notify by email and record. Runs exactly
-  // once (`finalized`), whatever the cause of the close: the agent said goodbye, the
-  // caller hung up, or MAX_CALL_SECONDS elapsed.
-  async function finalizeCall() {
-    if (finalized) return;
-    finalized = true;
-
-    const endedAt = new Date();
-    const durationSeconds = startedAt
-      ? Math.round((endedAt.getTime() - startedAt.getTime()) / 1000)
-      : null;
-
-    // Take the turns (in conversation order) and clear the state immediately: from here
-    // on the transcript only lives as an argument to reportCall.
-    const callTurns = transcript.toTurns();
-    transcript.clear();
-
-    await reportCall({
-      turns: callTurns,
-      callSid,
-      from: callerNumber,
-      startedAt: startedAt?.toISOString() ?? null,
-      endedAt: endedAt.toISOString(),
-      durationSeconds,
-    });
-  }
-
   // Starts the AI side of the call. Only called after the token has verified.
   async function startSession() {
-    const instructions = await buildInstructions();
+    const callerNumberKnown = isCallableNumber(session.from);
+    let instructions = await buildInstructions();
+    if (resumed) {
+      instructions += buildResumeContext(session.transcript.toTurns(), { callerNumberKnown });
+    }
     if (closed) return; // the caller hung up while we were loading the prompt
 
     // Silence and max-caller-turns guard: both end the call with a spoken farewell.
+    // Caller turns carry over from earlier legs of the same call.
     guard = createCallGuard({
       silenceMs: config.silenceTimeoutSeconds * 1000,
       maxCallerTurns: config.maxCallerTurns,
+      initialCallerTurns: session.callerTurns,
       onSilence() {
         endWithFarewell('silence');
       },
@@ -184,7 +226,9 @@ export function handleMediaStream(twilioWs) {
     realtime = connectRealtime({
       instructions,
       tools: toolDefinitions,
-      greeting: GREETING,
+      greeting: resumed
+        ? buildResumeGreeting({ language: resumeLang, callerNumberKnown })
+        : GREETING,
       handlers: {
         onAudioDelta(base64) {
           // Model voice -> Twilio (towards the caller). New audio means the agent is
@@ -210,15 +254,18 @@ export function handleMediaStream(twilioWs) {
         onItemOrder(itemId, role) {
           // A conversation item was created: reserve its place so late transcripts land
           // in the order people actually spoke.
-          transcript.reserve(itemId, role);
+          session.transcript.reserve(itemId, role);
         },
         onTranscript(role, text, itemId) {
           // Subtitle of a turn (caller or agent). In memory only, and we do not dump it
           // into the logs: it is third-party personal content. Transcripts arrive late
           // and say nothing about who is speaking now, so they don't touch the silence
           // timer; they only count caller turns.
-          transcript.add(role, text, itemId);
-          if (role === 'caller' && text?.trim()) guard.countCallerTurn();
+          session.transcript.add(role, text, itemId);
+          if (role === 'caller' && text?.trim()) {
+            session.callerTurns += 1;
+            guard.countCallerTurn();
+          }
         },
         onClose() {
           // OpenAI dropped and retries were exhausted: close the call so we don't leave
@@ -243,7 +290,16 @@ export function handleMediaStream(twilioWs) {
         },
         async onFunctionCall(event) {
           // The model wants to run a tool. We run it and return the result.
-          const ctx = { callSid, streamSid, twilioWs, realtime, endCall };
+          const ctx = {
+            callSid,
+            streamSid,
+            twilioWs,
+            realtime,
+            endCall,
+            callerNumber: session.from,
+            markTransferring: () => sessions.markTransferring(callSid),
+            cancelTransfer: () => sessions.cancelTransfer(callSid),
+          };
           try {
             const { output, triggerResponse } = await dispatchToolCall(event, ctx);
             realtime.sendFunctionResult(event.call_id, output, { triggerResponse });
@@ -259,11 +315,13 @@ export function handleMediaStream(twilioWs) {
       },
     });
 
-    // Cost guardrail: at the maximum duration, say goodbye (with the reason) and hang up.
-    // The farewell has its own fallback timer, so the call can't outlive this by much.
+    // Cost guardrail: at the maximum duration of the WHOLE call (all legs), say goodbye
+    // (with the reason) and hang up. The farewell has its own fallback timer.
+    const elapsedMs = Date.now() - session.startedAt.getTime();
+    const remainingMs = config.maxCallSeconds * 1000 - elapsedMs;
     maxTimer = setTimeout(() => {
       endWithFarewell('max_duration');
-    }, config.maxCallSeconds * 1000);
+    }, resumed ? Math.max(remainingMs, MIN_RESUMED_LEG_MS) : remainingMs);
 
     guard.start();
   }
@@ -291,11 +349,14 @@ export function handleMediaStream(twilioWs) {
 
         streamSid = msg.start?.streamSid;
         callSid = msg.start?.callSid;
-        callerNumber = params.from || '';
-        startedAt = new Date();
-        registerCallStart();
-        counted = true;
-        logger.info(`[media] stream started (streamSid=${streamSid}, callSid=${callSid})`);
+        const begun = sessions.begin(callSid, { from: params.from || '' });
+        session = begun.session;
+        resumed = begun.resumed || params.resume === '1';
+        resumeLang = params.lang === 'es' ? 'es' : 'en';
+        logger.info(
+          `[media] stream ${resumed ? 'resumed' : 'started'} ` +
+            `(streamSid=${streamSid}, callSid=${callSid})`
+        );
 
         startSession().catch((err) => {
           logger.error('[media] could not start the AI session:', err.message);
@@ -331,20 +392,14 @@ export function handleMediaStream(twilioWs) {
     farewell.stop();
     guard?.stop();
     realtime?.close();
-    if (counted) {
-      registerCallEnd();
-      counted = false;
-    }
     logger.info('[media] Twilio connection closed');
 
     // Unauthorized connections are not calls: nothing to summarize or record.
-    if (!authorized) return;
+    if (!authorized || !callSid) return;
 
-    // Summary + email + record. We don't await here (the callback is synchronous), but
-    // we catch any failure so no promise is left unhandled.
-    finalizeCall().catch((err) =>
-      logger.error('[media] error during call teardown:', err.message)
-    );
+    // Summary + email + record once the call is really over. If the stream closed
+    // because the call is being transferred, the session waits for /transfer-status.
+    sessions.legClosed(callSid);
   });
 
   twilioWs.on('error', (err) => {

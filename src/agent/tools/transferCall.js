@@ -5,10 +5,12 @@
 // <Connect><Stream> and dials the phone; our audio bridge closes on its own when Twilio
 // closes the Media Streams WebSocket.
 //
-// If the transfer fails (blocked by geo permissions, no answer, busy...), <Dial> calls
-// its `action` URL (/transfer-status) with the outcome; that route apologizes in the
-// conversation language and hangs up. Without an action URL Twilio would simply end the
-// call silently, which is what callers experienced before.
+// If Álvaro doesn't pick up (no answer, busy/rejected, blocked...), <Dial> calls its
+// `action` URL (/transfer-status), which reconnects the call to the agent so the
+// conversation continues. Without an action URL Twilio would simply end the call.
+//
+// Before redirecting, the call is marked as "transferring" so the stream closing is not
+// mistaken for the end of the call (the summary email is sent once, at the real end).
 
 import twilio from 'twilio';
 import { twilioClient } from '../../telephony/twilioClient.js';
@@ -59,8 +61,8 @@ export const transferCallTool = {
           type: 'string',
           enum: ['en', 'es'],
           description:
-            'Language you are speaking with the caller, used if the transfer fails and ' +
-            'they need to be told Álvaro could not be reached.',
+            'Language you are speaking with the caller, so the conversation can continue ' +
+            'in it if Álvaro does not pick up.',
         },
       },
       required: [],
@@ -82,12 +84,15 @@ export const transferCallTool = {
         language: args?.language,
       });
 
+      // Mark first: Twilio closes our stream as soon as it processes the update.
+      ctx.markTransferring?.();
       await twilioClient.calls(ctx.callSid).update({ twiml });
       logger.info(
         `[tool:transfer_call] ${ctx.callSid} -> mobile (reason: ${args?.reason ?? 'n/a'})`
       );
       return 'Transfer initiated. Connecting the caller to Álvaro now.';
     } catch (err) {
+      ctx.cancelTransfer?.();
       logger.error('[tool:transfer_call] error:', err.message);
       return 'The transfer failed due to a technical issue. Offer to take their contact details instead.';
     }

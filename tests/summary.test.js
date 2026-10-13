@@ -45,6 +45,11 @@ describe('formatTranscript', () => {
     assert.equal(formatTranscript([]), '');
     assert.equal(formatTranscript(), '');
   });
+
+  test('system events (e.g. transfer outcome) are labelled EVENTO', () => {
+    const text = formatTranscript([{ role: 'event', text: 'Álvaro no contestó.' }]);
+    assert.equal(text, 'EVENTO: Álvaro no contestó.');
+  });
 });
 
 describe('generateSummary', () => {

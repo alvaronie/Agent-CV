@@ -40,6 +40,12 @@ objetos ni listas:
   Datos de contacto: los que dejara.
   Acción para Álvaro: qué conviene hacer, o "ninguna" si no hace falta nada.
 
+Las líneas que empiezan por EVENTO no son de ninguna persona: son notas del sistema (por
+ejemplo, el resultado de un intento de transferir la llamada a Álvaro). Si se intentó
+transferir y Álvaro no contestó, dilo en el resumen e indica en "Acción para Álvaro" si el
+llamante quiere que le devuelva la llamada y a qué número (si es el mismo desde el que
+llamó, usa el número del llamante que aparece al principio).
+
 Sé breve y concreto. No inventes nada: si un dato no aparece en la conversación, di que no
 se facilitó. Si la llamada no tuvo contenido real (silencio, error, colgaron al momento),
 dilo en una línea y no rellenes secciones.`;
@@ -68,15 +74,18 @@ export function toPlainText(value) {
   return String(value).trim();
 }
 
+const ROLE_LABELS = { caller: 'LLAMANTE', agent: 'AGENTE', event: 'EVENTO' };
+
 /**
  * Turns the accumulated turns into readable text for the model.
+ * Roles: caller, agent, and event (system notes such as the transfer outcome).
  * @param {Array<{role:string, text:string}>} turns
  * @returns {string}
  */
 export function formatTranscript(turns = []) {
   const text = turns
     .filter((t) => t?.text)
-    .map((t) => `${t.role === 'caller' ? 'LLAMANTE' : 'AGENTE'}: ${t.text.trim()}`)
+    .map((t) => `${ROLE_LABELS[t.role] || 'AGENTE'}: ${t.text.trim()}`)
     .join('\n');
 
   // If we must trim, keep the end: the end of the call (contact, next steps) is usually

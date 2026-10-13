@@ -16,7 +16,8 @@ export const endCallTool = {
     type: 'function',
     name: 'end_call',
     description:
-      'End the call politely once the caller has what they need or says goodbye. ' +
+      'End the call. Only use it after the caller clearly says goodbye or confirms they ' +
+      'need nothing else (ask first whether there is anything else you can help with). ' +
       'Say a brief goodbye BEFORE calling this tool.',
     parameters: { type: 'object', properties: {}, required: [] },
   },

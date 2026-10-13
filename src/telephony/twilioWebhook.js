@@ -22,6 +22,34 @@ import { canAcceptCall } from './callLimiter.js';
 
 const VoiceResponse = twilio.twiml.VoiceResponse;
 
+/** Public host Twilio reaches us on: PUBLIC_URL if configured, else the request host. */
+export function publicHost(request) {
+  return config.publicUrl
+    ? config.publicUrl.replace(/^https?:\/\//, '').replace(/\/$/, '')
+    : request.headers.host;
+}
+
+/**
+ * TwiML that connects the call to our bidirectional media stream.
+ * IMPORTANT: Twilio's <Stream> url does NOT support query strings, so the auth token
+ * (and any other data) travels as Custom Parameters, which arrive in the `start` event.
+ * @param {{host:string, from?:string, extraParams?:Record<string,string>}} opts
+ */
+export function buildStreamTwiml({ host, from, extraParams = {} }) {
+  const token = createStreamToken(); // null if protection is disabled (dev)
+  const vr = new VoiceResponse();
+  const connect = vr.connect();
+  const stream = connect.stream({ url: `wss://${host}/media-stream` });
+  if (token) stream.parameter({ name: 'token', value: token });
+  // The Media Streams `start` event does not include the caller's number, and we want
+  // it for the email summary (Phase 5).
+  if (from) stream.parameter({ name: 'from', value: from });
+  for (const [name, value] of Object.entries(extraParams)) {
+    if (value) stream.parameter({ name, value: String(value) });
+  }
+  return vr.toString();
+}
+
 export function handleIncomingCall(request, reply) {
   // 1) Twilio signature check (unless disabled for local testing).
   if (config.security.validateTwilioSignature && !isValidTwilioRequest(request)) {
@@ -45,31 +73,8 @@ export function handleIncomingCall(request, reply) {
     return reply.send(busy.toString());
   }
 
-  // Public host: prefer PUBLIC_URL if configured; otherwise the request host.
-  const host = config.publicUrl
-    ? config.publicUrl.replace(/^https?:\/\//, '').replace(/\/$/, '')
-    : request.headers.host;
-
-  // 3) Authentication token for the WebSocket (null if protection is disabled).
-  // IMPORTANT: Twilio's <Stream> url does NOT support query strings, so the token travels
-  // as a Custom Parameter and arrives in the `start` event (start.customParameters.token),
-  // where mediaStream.js verifies it before connecting to OpenAI.
-  const token = createStreamToken();
-
-  const vr = new VoiceResponse();
-  const connect = vr.connect();
-  const stream = connect.stream({ url: `wss://${host}/media-stream` });
-  if (token) {
-    stream.parameter({ name: 'token', value: token });
-  }
-
-  // Pass the caller's number to the WebSocket: the Media Streams `start` event does not
-  // include it, and we want it for the email summary (Phase 5).
+  // 3) Connect the call to the media stream (auth token + caller number as Parameters).
   const from = request.body?.From || request.query?.From || '';
-  if (from) {
-    stream.parameter({ name: 'from', value: from });
-  }
-
   reply.header('Content-Type', 'text/xml');
-  return reply.send(vr.toString());
+  return reply.send(buildStreamTwiml({ host: publicHost(request), from }));
 }

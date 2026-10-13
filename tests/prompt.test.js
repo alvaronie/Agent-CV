@@ -27,6 +27,13 @@ describe('buildInstructions', () => {
     assert.match(p, /Never switch to a Latin American accent/);
   });
 
+  test('never ends the call on its own: asks for anything else, ends only after goodbye', async () => {
+    const p = await buildInstructions();
+    assert.match(p, /Never end the call on your own initiative/);
+    assert.match(p, /anything else you can help with/);
+    assert.match(p, /Only call end_call after the caller clearly says goodbye/);
+  });
+
   test('embeds the CV content (source of truth)', async () => {
     const p = await buildInstructions();
     // The real CV contains the owner's name.

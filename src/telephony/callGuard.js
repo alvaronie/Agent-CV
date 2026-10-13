@@ -19,6 +19,7 @@
  * @param {object} opts
  * @param {number} opts.silenceMs - ms of mutual silence before firing (0 = disabled)
  * @param {number} opts.maxCallerTurns - maximum caller turns (0 = disabled)
+ * @param {number} [opts.initialCallerTurns] - turns already used in earlier legs of the call
  * @param {() => void} [opts.onSilence] - invoked when the silence timeout fires
  * @param {() => void} [opts.onMaxTurns] - invoked when the max turns is reached
  * @param {typeof setTimeout} [opts.setTimer]
@@ -27,13 +28,14 @@
 export function createCallGuard({
   silenceMs,
   maxCallerTurns,
+  initialCallerTurns = 0,
   onSilence,
   onMaxTurns,
   setTimer = setTimeout,
   clearTimer = clearTimeout,
 }) {
   let timer = null;
-  let callerTurns = 0;
+  let callerTurns = initialCallerTurns;
   let stopped = false;
   let started = false;
   let callerSpeaking = false;
