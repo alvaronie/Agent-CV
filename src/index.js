@@ -54,7 +54,9 @@ try {
       '[voice] VOICE_PROVIDER=elevenlabs but ELEVENLABS_API_KEY/ELEVENLABS_VOICE_ID missing; using OpenAI voice'
     );
   }
-  logger.info(`[voice] agent voice: ${isElevenLabsEnabled() ? 'elevenlabs' : 'openai'}`);
+  logger.info(
+    `[voice] agent voice: ${isElevenLabsEnabled() ? `elevenlabs (${config.elevenlabs.modelId})` : 'openai'}`
+  );
   await app.listen({ port: config.port, host: config.host });
   logger.info(`Agent CV listening on http://${config.host}:${config.port}`);
   logger.info('  - Health:  GET  /health');

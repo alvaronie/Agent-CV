@@ -40,6 +40,7 @@ import { createCallGuard } from './callGuard.js';
 import { createFarewell, FAREWELL_TAG } from './farewell.js';
 import { createLatencyMeter } from './latencyMeter.js';
 import { createElevenLabsTts } from '../voice/elevenLabsTts.js';
+import { createElevenLabsDialogue, isDialogueModel } from '../voice/elevenLabsDialogue.js';
 import { verifyStreamToken } from '../security/streamToken.js';
 import { config } from '../config/index.js';
 import { logger } from '../utils/logger.js';
@@ -151,6 +152,8 @@ export function handleMediaStream(twilioWs, { sessions = callSessions } = {}) {
 
   // Voice: OpenAI speech-to-speech, or OpenAI text + ElevenLabs voice.
   const useTts = isElevenLabsEnabled();
+  // Shown in the latency logs, so different voices/models can be compared.
+  const voiceLabel = useTts ? `elevenlabs/${config.elevenlabs.modelId}` : 'openai';
   let tts = null;
   // ElevenLabs mode: response.done arrives before its audio is generated, so the "answer
   // finished" handling waits for the utterance to be done.
@@ -164,7 +167,7 @@ export function handleMediaStream(twilioWs, { sessions = callSessions } = {}) {
     const sample = latency.firstAudio();
     if (sample) {
       logger.info(
-        `[latency] voice=${useTts ? 'elevenlabs' : 'openai'} first_audio_ms=${sample.audioMs}` +
+        `[latency] voice=${voiceLabel} first_audio_ms=${sample.audioMs}` +
           (sample.textMs === null ? '' : ` first_text_ms=${sample.textMs}`)
       );
     }
@@ -290,7 +293,11 @@ export function handleMediaStream(twilioWs, { sessions = callSessions } = {}) {
 
     // ElevenLabs voice: OpenAI replies in text and this turns it into speech.
     if (useTts) {
-      tts = createElevenLabsTts({
+      // v4/v3 models use the Text to Dialogue WebSocket; Flash uses the TTS one.
+      const createVoice = isDialogueModel(config.elevenlabs.modelId)
+        ? createElevenLabsDialogue
+        : createElevenLabsTts;
+      tts = createVoice({
         apiKey: config.elevenlabs.apiKey,
         voiceId: config.elevenlabs.voiceId,
         modelId: config.elevenlabs.modelId,
@@ -474,7 +481,7 @@ export function handleMediaStream(twilioWs, { sessions = callSessions } = {}) {
     const lat = latency.summary();
     if (lat) {
       logger.info(
-        `[latency] voice=${useTts ? 'elevenlabs' : 'openai'} answers=${lat.answers} ` +
+        `[latency] voice=${voiceLabel} answers=${lat.answers} ` +
           `avg_ms=${lat.avgMs} median_ms=${lat.medianMs} min_ms=${lat.minMs} max_ms=${lat.maxMs}`
       );
     }

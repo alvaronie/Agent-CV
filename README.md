@@ -97,7 +97,13 @@ mode OpenAI starts answering sooner, which offsets the extra TTS step.
 
 - **No latency penalty**, and the ElevenLabs voice sounds noticeably better.
 - With a Spanish voice, English terms (e.g. "AWS") sound odd, and voice choice affects
-  speaking pace. Voice selection is still being tuned.
+  speaking pace.
+- **Follow-up: accent per language.** With the Flash v2.5 model, a Spain-Spanish voice
+  spoke English with a strong Spanish accent, even when forcing English. Comparing
+  samples of the same voice across models, only **Eleven v4 Turbo** gave each language
+  its own accent without being told the language. It is served over a different
+  WebSocket (Text to Dialogue), so the agent now has two ElevenLabs clients and picks
+  one from the model setting. Latency with v4 Turbo is still to be re-measured.
 - Caveats: one call per voice, and the measurement is server-side. The delay the caller
   hears is higher (end-of-speech detection and the phone network), but equally for both.
 
@@ -125,7 +131,9 @@ Agent CV/
 │   ├── realtime/
 │   │   ├── openaiRealtime.js   # OpenAI Realtime client (audio or text mode)
 │   │   └── reconnectPolicy.js  # reconnection backoff
-│   ├── voice/elevenLabsTts.js  # ElevenLabs streaming TTS client
+│   ├── voice/
+│   │   ├── elevenLabsTts.js      # ElevenLabs TTS WebSocket (Flash)
+│   │   └── elevenLabsDialogue.js # ElevenLabs Text to Dialogue WebSocket (v4 Turbo)
 │   ├── security/
 │   │   ├── twilioSignature.js  # X-Twilio-Signature validation
 │   │   └── streamToken.js      # HMAC token for the media stream
@@ -145,6 +153,6 @@ Agent CV/
 2. Copy `.env.example` to `.env` and fill in the keys.
 3. Put the CV in `data/cv/cv.md`.
 4. `npm run dev` to start the backend locally.
-5. `npm test` to run the unit tests (135 tests, no network calls).
+5. `npm test` to run the unit tests (148 tests, no network calls).
 
 Deployment guide: [`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md).

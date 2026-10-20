@@ -62,8 +62,10 @@ export const config = {
   elevenlabs: {
     apiKey: process.env.ELEVENLABS_API_KEY || '',
     voiceId: process.env.ELEVENLABS_VOICE_ID || '',
-    // Flash: ElevenLabs' lowest-latency multilingual model, meant for real-time agents.
-    modelId: process.env.ELEVENLABS_MODEL_ID || 'eleven_flash_v2_5',
+    // v4 Turbo: the only model that, with our voice, gives each language its own accent
+    // without being told the language (tested). Served over the Text to Dialogue
+    // WebSocket. Set eleven_flash_v2_5 to go back to the multi-context TTS WebSocket.
+    modelId: process.env.ELEVENLABS_MODEL_ID || 'eleven_v4_turbo',
   },
 
   twilio: {
