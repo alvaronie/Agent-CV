@@ -103,7 +103,9 @@ mode OpenAI starts answering sooner, which offsets the extra TTS step.
   samples of the same voice across models, only **Eleven v4 Turbo** gave each language
   its own accent without being told the language. It is served over a different
   WebSocket (Text to Dialogue), so the agent now has two ElevenLabs clients and picks
-  one from the model setting. Latency with v4 Turbo is still to be re-measured.
+  one from the model setting. On a real call, v4 Turbo kept each language's accent,
+  handled interruptions, and averaged **445 ms** to the first audio (8 answers), so it
+  adds no latency over Flash.
 - Caveats: one call per voice, and the measurement is server-side. The delay the caller
   hears is higher (end-of-speech detection and the phone network), but equally for both.
 
